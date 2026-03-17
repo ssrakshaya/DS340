@@ -241,6 +241,8 @@ regressions_main <- df_list %>% imap(., function(x, name) {
 texreg(regressions_main)
 map(regressions_main, get_cis)
 ``` -->
+
+<!--
 ```{r}
 # ============================================
 # DEMONSTRATION: Testing model on sample data
@@ -374,3 +376,504 @@ map(regressions_main, function(model) {
   })
 })
 ```
+-->
+
+
+
+
+
+# CODE DEVELOPMENT CHECK 3 (03/01/2026)
+```{r}
+# ============================================
+# ALTERNATIVE MODEL SPECIFICATIONS
+# Testing three different modeling approaches
+# ============================================
+
+set.seed(123)  # For reproducibility
+# Start with 500 rows for quick testing, then increase to 2000 once working
+sample_size <- 2000  
+
+cat("=" , rep("=", 50), "\n", sep = "")
+cat("RUNNING ALTERNATIVE MODEL SPECIFICATIONS\n")
+cat("Sample size:", sample_size, "rows per dataset\n")
+cat("Models: 1. Zero-Inflated Beta-Binomial\n")
+cat("        2. Generalized Additive Mixed Model (GAMM)\n")
+cat("        3. Mixed Effects Random Forest\n")
+cat("=" , rep("=", 50), "\n\n", sep = "")
+
+# Create sampled datasets
+df_list_sample <- df_list %>% map(., function(x) {
+  x %>% slice_sample(n = min(sample_size, nrow(x)))
+})
+
+#===============================================================================
+# MODEL 1: ZERO-INFLATED BETA-BINOMIAL MIXED MODEL
+#===============================================================================
+
+# Load required package
+library(glmmTMB)
+
+cat("\n" , rep("=", 50), "\n", sep = "")
+cat("MODEL 1: Zero-Inflated Beta-Binomial\n")
+cat(rep("=", 50), "\n", sep = "")
+
+# Fit ZIBB for Politicians
+cat("\n----------------------------------------\n")
+cat("Fitting ZIBB model for: Politicians\n")
+cat("Sample size:", nrow(df_list_sample$Politicians), "rows\n")
+cat("Time started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+start_time <- Sys.time()
+zibb_politicians <- tryCatch({
+  glmmTMB(
+    formula = cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + 
+      MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + 
+      Quote + (1 | UserID),
+    ziformula = ~ MediaAttached + MoralWords + MoralEmotionalWords + (1 | UserID),
+    data = df_list_sample$Politicians,
+    family = betabinomial(link = "logit"),
+    control = glmmTMBControl(optCtrl = list(iter.max = 1e5, eval.max = 1e5))
+  )
+}, error = function(e) {
+  cat("ERROR in Politicians ZIBB:", e$message, "\n")
+  return(NULL)
+})
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat("✓ Completed in", round(elapsed, 2), "minutes\n")
+
+# Fit ZIBB for Newspeople
+cat("\n----------------------------------------\n")
+cat("Fitting ZIBB model for: Newspeople\n")
+cat("Sample size:", nrow(df_list_sample$Newspeople), "rows\n")
+cat("Time started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+start_time <- Sys.time()
+zibb_newspeople <- tryCatch({
+  glmmTMB(
+    formula = cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + 
+      MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + 
+      Quote + (1 | UserID),
+    ziformula = ~ MediaAttached + MoralWords + MoralEmotionalWords + (1 | UserID),
+    data = df_list_sample$Newspeople,
+    family = betabinomial(link = "logit"),
+    control = glmmTMBControl(optCtrl = list(iter.max = 1e5, eval.max = 1e5))
+  )
+}, error = function(e) {
+  cat("ERROR in Newspeople ZIBB:", e$message, "\n")
+  return(NULL)
+})
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat("✓ Completed in", round(elapsed, 2), "minutes\n")
+
+# Fit ZIBB for Activists
+cat("\n----------------------------------------\n")
+cat("Fitting ZIBB model for: Activists\n")
+cat("Sample size:", nrow(df_list_sample$Activists), "rows\n")
+cat("Time started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+start_time <- Sys.time()
+zibb_activists <- tryCatch({
+  glmmTMB(
+    formula = cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + 
+      MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + 
+      Quote + (1 | UserID),
+    ziformula = ~ MediaAttached + MoralWords + MoralEmotionalWords + (1 | UserID),
+    data = df_list_sample$Activists,
+    family = betabinomial(link = "logit"),
+    control = glmmTMBControl(optCtrl = list(iter.max = 1e5, eval.max = 1e5))
+  )
+}, error = function(e) {
+  cat("ERROR in Activists ZIBB:", e$message, "\n")
+  return(NULL)
+})
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat("✓ Completed in", round(elapsed, 2), "minutes\n")
+
+# Collect ZIBB models
+zibb_models <- list(
+  Politicians = zibb_politicians,
+  Newspeople = zibb_newspeople,
+  Activists = zibb_activists
+)
+
+# Display ZIBB results
+cat("\n\nZIBB Model Summary:\n")
+cat(rep("-", 30), "\n")
+if(!is.null(zibb_politicians)) {
+  cat("\nPoliticians ZIBB:\n")
+  print(summary(zibb_politicians))
+}
+if(!is.null(zibb_newspeople)) {
+  cat("\nNewspeople ZIBB:\n")
+  print(summary(zibb_newspeople))
+}
+if(!is.null(zibb_activists)) {
+  cat("\nActivists ZIBB:\n")
+  print(summary(zibb_activists))
+}
+```
+
+```{r}
+#===============================================================================
+# MODEL 2: GENERALIZED ADDITIVE MIXED MODEL (GAMM)
+#===============================================================================
+# Fix: Reduce k for smaller datasets to avoid "fewer unique combinations" error
+#===============================================================================
+
+cat("\n" , rep("=", 50), "\n", sep = "")
+cat("MODEL 2: Generalized Additive Mixed Model (GAMM)\n")
+cat(rep("=", 50), "\n", sep = "")
+cat("Note: Using reduced k=3 for small samples to avoid errors\n")
+
+library(mgcv)
+
+# Function to determine appropriate k based on sample size and unique values
+get_k_value <- function(x, var_name, max_k = 5) {
+  unique_vals <- length(unique(x[[var_name]]))
+  # k must be less than or equal to unique combinations
+  return(min(max_k, floor(unique_vals / 2), 10))
+}
+
+# Fit GAMM for Politicians
+cat("\n----------------------------------------\n")
+cat("Fitting GAMM for: Politicians\n")
+cat("Sample size:", nrow(df_list_sample$Politicians), "rows\n")
+cat("Time started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+start_time <- Sys.time()
+gamm_politicians <- tryCatch({
+  # Calculate appropriate k values based on data
+  k_text <- get_k_value(df_list_sample$Politicians, "TextComplexity", 4)
+  k_moral <- get_k_value(df_list_sample$Politicians, "MoralWords", 4)
+  k_moralemo <- get_k_value(df_list_sample$Politicians, "MoralEmotionalWords", 4)
+  k_emo <- get_k_value(df_list_sample$Politicians, "EmotionalWords", 4)
+  k_words <- get_k_value(df_list_sample$Politicians, "WordCount", 4)
+  
+  cat("  Using k values:", k_text, k_moral, k_moralemo, k_emo, k_words, "\n")
+  
+  gam(
+    formula = cbind(HReplies, Replies - HReplies) ~ 
+      MediaAttached + 
+      s(TextComplexity, k = k_text) +                    
+      s(MoralWords, k = k_moral) +                         
+      s(MoralEmotionalWords, k = k_moralemo) +                 
+      s(EmotionalWords, k = k_emo) +                      
+      s(WordCount, k = k_words) +                           
+      Quote +
+      s(UserID, bs = "re"),
+    data = df_list_sample$Politicians,
+    family = binomial(link = "logit"),
+    method = "REML"
+  )
+}, error = function(e) {
+  cat("ERROR in Politicians GAMM:", e$message, "\n")
+  cat("Trying simpler model without smooth terms...\n")
+  
+  # Fallback: Use linear terms instead of smooths
+  tryCatch({
+    gam(
+      formula = cbind(HReplies, Replies - HReplies) ~ 
+        MediaAttached + TextComplexity + MoralWords + 
+        MoralEmotionalWords + EmotionalWords + WordCount + Quote +
+        s(UserID, bs = "re"),
+      data = df_list_sample$Politicians,
+      family = binomial(link = "logit"),
+      method = "REML"
+    )
+  }, error = function(e2) {
+    cat("ERROR in simplified Politicians GAMM:", e2$message, "\n")
+    return(NULL)
+  })
+})
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat("✓ Completed in", round(elapsed, 2), "minutes\n")
+
+# Fit GAMM for Newspeople
+cat("\n----------------------------------------\n")
+cat("Fitting GAMM for: Newspeople\n")
+cat("Sample size:", nrow(df_list_sample$Newspeople), "rows\n")
+cat("Time started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+start_time <- Sys.time()
+gamm_newspeople <- tryCatch({
+  # Calculate appropriate k values based on data
+  k_text <- get_k_value(df_list_sample$Newspeople, "TextComplexity", 4)
+  k_moral <- get_k_value(df_list_sample$Newspeople, "MoralWords", 4)
+  k_moralemo <- get_k_value(df_list_sample$Newspeople, "MoralEmotionalWords", 4)
+  k_emo <- get_k_value(df_list_sample$Newspeople, "EmotionalWords", 4)
+  k_words <- get_k_value(df_list_sample$Newspeople, "WordCount", 4)
+  
+  cat("  Using k values:", k_text, k_moral, k_moralemo, k_emo, k_words, "\n")
+  
+  gam(
+    formula = cbind(HReplies, Replies - HReplies) ~ 
+      MediaAttached + 
+      s(TextComplexity, k = k_text) +                    
+      s(MoralWords, k = k_moral) +                         
+      s(MoralEmotionalWords, k = k_moralemo) +                 
+      s(EmotionalWords, k = k_emo) +                      
+      s(WordCount, k = k_words) +                           
+      Quote +
+      s(UserID, bs = "re"),
+    data = df_list_sample$Newspeople,
+    family = binomial(link = "logit"),
+    method = "REML"
+  )
+}, error = function(e) {
+  cat("ERROR in Newspeople GAMM:", e$message, "\n")
+  cat("Trying simpler model without smooth terms...\n")
+  
+  # Fallback: Use linear terms instead of smooths
+  tryCatch({
+    gam(
+      formula = cbind(HReplies, Replies - HReplies) ~ 
+        MediaAttached + TextComplexity + MoralWords + 
+        MoralEmotionalWords + EmotionalWords + WordCount + Quote +
+        s(UserID, bs = "re"),
+      data = df_list_sample$Newspeople,
+      family = binomial(link = "logit"),
+      method = "REML"
+    )
+  }, error = function(e2) {
+    cat("ERROR in simplified Newspeople GAMM:", e2$message, "\n")
+    return(NULL)
+  })
+})
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat("✓ Completed in", round(elapsed, 2), "minutes\n")
+
+# Fit GAMM for Activists
+cat("\n----------------------------------------\n")
+cat("Fitting GAMM for: Activists\n")
+cat("Sample size:", nrow(df_list_sample$Activists), "rows\n")
+cat("Time started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+start_time <- Sys.time()
+gamm_activists <- tryCatch({
+  # Calculate appropriate k values based on data
+  k_text <- get_k_value(df_list_sample$Activists, "TextComplexity", 4)
+  k_moral <- get_k_value(df_list_sample$Activists, "MoralWords", 4)
+  k_moralemo <- get_k_value(df_list_sample$Activists, "MoralEmotionalWords", 4)
+  k_emo <- get_k_value(df_list_sample$Activists, "EmotionalWords", 4)
+  k_words <- get_k_value(df_list_sample$Activists, "WordCount", 4)
+  
+  cat("  Using k values:", k_text, k_moral, k_moralemo, k_emo, k_words, "\n")
+  
+  gam(
+    formula = cbind(HReplies, Replies - HReplies) ~ 
+      MediaAttached + 
+      s(TextComplexity, k = k_text) +                    
+      s(MoralWords, k = k_moral) +                         
+      s(MoralEmotionalWords, k = k_moralemo) +                 
+      s(EmotionalWords, k = k_emo) +                      
+      s(WordCount, k = k_words) +                           
+      Quote +
+      s(UserID, bs = "re"),
+    data = df_list_sample$Activists,
+    family = binomial(link = "logit"),
+    method = "REML"
+  )
+}, error = function(e) {
+  cat("ERROR in Activists GAMM:", e$message, "\n")
+  cat("Trying simpler model without smooth terms...\n")
+  
+  # Fallback: Use linear terms instead of smooths
+  tryCatch({
+    gam(
+      formula = cbind(HReplies, Replies - HReplies) ~ 
+        MediaAttached + TextComplexity + MoralWords + 
+        MoralEmotionalWords + EmotionalWords + WordCount + Quote +
+        s(UserID, bs = "re"),
+      data = df_list_sample$Activists,
+      family = binomial(link = "logit"),
+      method = "REML"
+    )
+  }, error = function(e2) {
+    cat("ERROR in simplified Activists GAMM:", e2$message, "\n")
+    return(NULL)
+  })
+})
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat("✓ Completed in", round(elapsed, 2), "minutes\n")
+
+# Collect GAMM models
+gamm_models <- list(
+  Politicians = gamm_politicians,
+  Newspeople = gamm_newspeople,
+  Activists = gamm_activists
+)
+
+# Display GAMM results
+cat("\n\nGAMM Summary:\n")
+cat(rep("-", 30), "\n")
+if(!is.null(gamm_politicians)) {
+  cat("\nPoliticians GAMM - Smooth terms:\n")
+  print(summary(gamm_politicians)$s.table)
+}
+if(!is.null(gamm_newspeople)) {
+  cat("\nNewspeople GAMM - Smooth terms:\n")
+  print(summary(gamm_newspeople)$s.table)
+}
+if(!is.null(gamm_activists)) {
+  cat("\nActivists GAMM - Smooth terms:\n")
+  print(summary(gamm_activists)$s.table)
+}
+```
+
+```{r}
+#===============================================================================
+# TWO-STEP RANDOM FOREST + MIXED EFFECTS
+#===============================================================================
+
+library(ranger)
+library(lme4)
+
+fit_ranger_plus_re <- function(data, dataset_name) {
+  
+  cat("\nFitting Ranger+RE for:", dataset_name, "\n")
+  start_time <- Sys.time()
+  
+  # Prepare data
+  x_rf <- data %>%
+    mutate(
+      MediaAttached = as.numeric(MediaAttached),
+      Quote = as.numeric(Quote)
+    )
+  
+  # Step 1: Random forest with importance
+  rf_model <- ranger(
+    formula = ProportionOfHate ~ MediaAttached + TextComplexity + 
+      MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote,
+    data = x_rf,
+    num.trees = 500,
+    importance = "impurity",
+    case.weights = x_rf$Replies / mean(x_rf$Replies),
+    seed = 123
+  )
+  
+  # Step 2: Mixed model on residuals
+  x_rf$rf_pred <- predictions(rf_model)
+  lmm_model <- lmer(ProportionOfHate ~ rf_pred + (1 | UserID), data = x_rf)
+  
+  cat("✓ Completed in", round(difftime(Sys.time(), start_time, units = "mins"), 2), "minutes\n")
+  
+  return(list(forest = rf_model, mixed_model = lmm_model))
+}
+
+# Fit models
+two_step_models <- list(
+  Politicians = fit_ranger_plus_re(df_list_sample$Politicians, "Politicians"),
+  Newspeople = fit_ranger_plus_re(df_list_sample$Newspeople, "Newspeople"),
+  Activists = fit_ranger_plus_re(df_list_sample$Activists, "Activists")
+)
+
+# Display importance
+for(name in names(two_step_models)) {
+  cat("\n", name, ":\n", sep = "")
+  imp <- two_step_models[[name]]$forest$variable.importance
+  imp_df <- data.frame(variable = names(imp), importance = as.numeric(imp)) %>%
+    arrange(desc(importance)) %>%
+    mutate(pct = importance / sum(importance) * 100)
+  print(imp_df)
+  
+  # Random effects
+  var_comp <- VarCorr(two_step_models[[name]]$mixed_model)
+  cat("Random effect variance:", round(as.numeric(var_comp$UserID), 6), "\n")
+}
+```
+
+```{r}
+#===============================================================================
+# MODEL COMPARISON - INCLUDING RANDOM FOREST
+#===============================================================================
+
+cat("\n" , rep("=", 50), "\n", sep = "")
+cat("MODEL COMPARISON\n")
+cat(rep("=", 50), "\n", sep = "")
+
+comparison_df <- tibble(
+  Dataset = character(),
+  Model = character(),
+  AIC = numeric(),
+  LogLik = numeric(),
+  RMSE = numeric(),
+  R2 = numeric()
+)
+
+# Add ZIBB models
+for(name in names(zibb_models)) {
+  if(!is.null(zibb_models[[name]])) {
+    # For ZIBB, we can't easily get RMSE, so leave as NA
+    comparison_df <- bind_rows(
+      comparison_df,
+      tibble(
+        Dataset = name,
+        Model = "ZIBB",
+        AIC = AIC(zibb_models[[name]]),
+        LogLik = as.numeric(logLik(zibb_models[[name]])),
+        RMSE = NA,
+        R2 = NA
+      )
+    )
+  }
+}
+
+# Add GAMM models
+for(name in names(gamm_models)) {
+  if(!is.null(gamm_models[[name]])) {
+    # For GAMM, we can calculate RMSE on training data
+    pred <- predict(gamm_models[[name]], type = "response")
+    actual <- with(df_list_sample[[name]], HReplies / Replies)
+    rmse <- sqrt(mean((actual - pred)^2, na.rm = TRUE))
+    r2 <- cor(actual, pred, use = "complete.obs")^2
+    
+    comparison_df <- bind_rows(
+      comparison_df,
+      tibble(
+        Dataset = name,
+        Model = "GAMM",
+        AIC = AIC(gamm_models[[name]]),
+        LogLik = as.numeric(logLik(gamm_models[[name]])),
+        RMSE = rmse,
+        R2 = r2
+      )
+    )
+  }
+}
+
+# Add Random Forest models (from your two-step approach)
+for(name in names(two_step_models)) {
+  if(!is.null(two_step_models[[name]])) {
+    rf_model <- two_step_models[[name]]$forest
+    
+    comparison_df <- bind_rows(
+      comparison_df,
+      tibble(
+        Dataset = name,
+        Model = "Random Forest",
+        AIC = NA,  # RF doesn't have AIC
+        LogLik = NA,  # RF doesn't have logLik
+        RMSE = sqrt(rf_model$prediction.error),  # RMSE from RF
+        R2 = rf_model$r.squared  # R² from RF
+      )
+    )
+  }
+}
+
+# Print comparison
+if(nrow(comparison_df) > 0) {
+  cat("\nModel Comparison:\n")
+  print(comparison_df %>% 
+          arrange(Dataset, Model) %>%
+          group_by(Dataset) %>%
+          mutate(
+            Best_AIC = ifelse(!is.na(AIC) & AIC == min(AIC, na.rm = TRUE), "***", ""),
+            Best_RMSE = ifelse(!is.na(RMSE) & RMSE == min(RMSE, na.rm = TRUE), "***", ""),
+            Best_R2 = ifelse(!is.na(R2) & R2 == max(R2, na.rm = TRUE), "***", "")
+          ) %>%
+          select(Dataset, Model, AIC, RMSE, R2, Best_RMSE, Best_R2))
+}
+
+cat("\n" , rep("=", 50), "\n", sep = "")
+```
+
