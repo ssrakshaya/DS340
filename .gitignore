@@ -1,0 +1,21 @@
+# Large model objects
+R Data/gamm_models.RData
+R Data/gmerf_models.RData
+R Data/directed_results.RData
+R Data/likes_results.RData
+R Data/retweet_results.RData
+R Data/supplements_workspace.RData
+R Data/xyz_results.RData
+
+# RStudio session file
+R Scripts/.RData
+
+# Assignment documents - not needed in repo
+DetectingHateSpeechandOffensiveLanguageusingMachineLearninginPublishedOnlineContent (1).pdf
+Moralized language predicts hate speech on social media.pdf
+DS 340W Peer Review Template.docx
+Week 4 Code Development 2nd Check-In.docx
+
+# General RStudio files
+.Rhistory
+.Rproj.user/

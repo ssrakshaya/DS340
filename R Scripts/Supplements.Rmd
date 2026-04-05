@@ -1,0 +1,738 @@
+---
+title: "Moralized Language Predicts Hate Speech (Supplements)"
+author: KS
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+header-includes:
+   - \usepackage{dcolumn}
+   - \usepackage{booktabs}
+   - \usepackage{float}
+   - \usepackage{longtable}
+   - \usepackage{multirow}
+   - \usepackage{siunitx}
+output:
+  pdf_document:
+    toc: yes
+    keep_tex: no
+    number_sections: yes
+---
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lme4)
+library(glmmTMB)
+library(mgcv)
+library(ranger)
+library(tidymodels)
+library(broom)
+library(broom.mixed)
+library(car)
+library(furrr)
+library(wesanderson)
+
+options(xtable.comment = FALSE, width = 80, scipen = 999)
+plan(multisession, workers = parallel::detectCores() / 2)
+source("utils.R")
+```
+```{r paths}
+inputPath <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/"
+splitPath <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/split_output/"
+graphPath <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/Graphs/"
+```
+```{r load-data}
+load_dataset <- function(path, label) {
+  read_csv(path, show_col_types = FALSE) %>%
+    mutate(
+      UserID     = factor(UserID),
+      SourceHate = relevel(factor(SourceHate), "regular"),
+      Dataset    = label
+    )
+}
+
+df_train <- list(
+  Politicians = load_dataset(paste0(splitPath, "df_politicians_train.csv"), "Politicians"),
+  Newspeople  = load_dataset(paste0(splitPath, "df_newspeople_train.csv"),  "Newspeople"),
+  Activists   = load_dataset(paste0(splitPath, "df_activists_train.csv"),   "Activists")
+)
+
+df_test <- list(
+  Politicians = load_dataset(paste0(splitPath, "df_politicians_test.csv"), "Politicians"),
+  Newspeople  = load_dataset(paste0(splitPath, "df_newspeople_test.csv"),  "Newspeople"),
+  Activists   = load_dataset(paste0(splitPath, "df_activists_test.csv"),   "Activists")
+)
+
+cat("Training set sizes:\n")
+walk2(df_train, names(df_train), ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
+cat("Test set sizes:\n")
+walk2(df_test,  names(df_test),  ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
+```
+```{r helper-functions}
+# Standard GLMM formula used across all robustness checks
+glmm_formula <- cbind(HReplies, Replies - HReplies) ~
+  MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+  EmotionalWords + WordCount + Quote + (1 | UserID)
+
+glmm_control <- glmerControl(
+  optimizer = "bobyqa",
+  optCtrl   = list(maxfun = 2e5)
+)
+
+# Fit a standard GLMM on any dataset
+fit_glmm <- function(data, name, formula = glmm_formula) {
+  cat("\nFitting GLMM:", name, "| n =", nrow(data),
+      "| started:", format(Sys.time(), "%H:%M:%S"), "\n")
+  start <- Sys.time()
+
+  m <- suppressWarnings(
+    tryCatch(
+      glmer(formula, data = data, family = binomial(link = "logit"),
+            control = glmm_control, nAGQ = 1),
+      error = function(e) { cat("ERROR:", e$message, "\n"); NULL }
+    )
+  )
+
+  cat("Completed in",
+      round(difftime(Sys.time(), start, units = "mins"), 2), "mins\n")
+  m
+}
+
+# Scale continuous predictors for models that need standardised inputs
+scale_df <- function(df) {
+  df %>% mutate(
+    TextComplexityZ      = as.numeric(scale(TextComplexity)),
+    MoralWordsZ          = as.numeric(scale(MoralWords)),
+    MoralEmotionalWordsZ = as.numeric(scale(MoralEmotionalWords)),
+    EmotionalWordsZ      = as.numeric(scale(EmotionalWords)),
+    WordCountZ           = as.numeric(scale(WordCount)),
+    RetweetCountZ        = as.numeric(scale(RetweetCount)),
+    LikeCountZ           = as.numeric(scale(LikeCount))
+  )
+}
+
+# Add word proportion variables
+add_proportions <- function(df) {
+  df %>% mutate(
+    MoralWordsProp          = MoralWords / WordCount,
+    MoralEmotionalWordsProp = MoralEmotionalWords / WordCount,
+    EmotionalWordsProp      = EmotionalWords / WordCount
+  )
+}
+
+# Add binary moral word indicators
+add_binary <- function(df) {
+  df %>% mutate(
+    MoralBinary          = MoralWords > 0,
+    MoralEmotionalBinary = MoralEmotionalWords > 0
+  )
+}
+
+save.image()
+```
+
+# Out-of-Sample R² Comparison
+
+Replicates the parent paper's key robustness claim: that adding moralized
+language to a baseline content model improves out-of-sample R² by 1.22–1.55x.
+Four model specifications are compared via 10-fold cross-validation.
+```{r oos-r2-function}
+evaluate_oos_r2 <- function(data, dataset_name, n_folds = 10, seed = 123) {
+
+  cat("\nOut-of-sample R² evaluation:", dataset_name,
+      "| n =", nrow(data), "\n")
+  set.seed(seed)
+
+  df <- data %>%
+    mutate(
+      MediaAttached = as.numeric(MediaAttached),
+      Quote         = as.numeric(Quote)
+    ) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  folds <- vfold_cv(df, v = n_folds)
+
+  author_vars  <- c("Followers", "Followees", "AccountAge", "Verified")
+  content_vars <- c("WordCount", "TextComplexity", "EmotionalWords",
+                    "Quote", "MediaAttached")
+  xyz_vars     <- c("XYZCount")
+  moral_vars   <- c("MoralWords", "MoralEmotionalWords")
+
+  specs <- list(
+    "Author only"                  = author_vars,
+    "Author + Content"             = c(author_vars, content_vars),
+    "Author + Content + XYZ"       = c(author_vars, content_vars, xyz_vars),
+    "Author + Content + Moral"     = c(author_vars, content_vars, moral_vars)
+  )
+
+  mod_glm <- linear_reg() %>%
+    set_engine("lm") %>%
+    translate()
+
+  results <- imap(specs, function(vars, spec_name) {
+    cat("  Fitting:", spec_name, "\n")
+    wf <- workflow() %>%
+      add_variables(outcomes    = "ProportionOfHate",
+                    predictors  = all_of(vars)) %>%
+      add_model(mod_glm,
+                formula = as.formula(
+                  paste("ProportionOfHate ~", paste(vars, collapse = " + "))
+                ))
+    tryCatch(
+      fit_resamples(wf, folds, metrics = metric_set(rsq)) %>%
+        collect_metrics() %>% pull(mean),
+      error = function(e) { cat("  Error:", e$message, "\n"); NA }
+    )
+  })
+
+  r2_df <- data.frame(
+    Specification          = names(results),
+    R2                     = unlist(results),
+    stringsAsFactors       = FALSE
+  )
+
+  content_r2 <- r2_df$R2[r2_df$Specification == "Author + Content"]
+  moral_r2   <- r2_df$R2[r2_df$Specification == "Author + Content + Moral"]
+  r2_df$Moral_vs_Content_ratio <- NA
+  r2_df$Moral_vs_Content_ratio[
+    r2_df$Specification == "Author + Content + Moral"
+  ] <- round(moral_r2 / content_r2, 3)
+
+  cat("\nResults for", dataset_name, ":\n")
+  print(r2_df, row.names = FALSE, digits = 4)
+  cat("\nMoral language improvement over content model:",
+      round(moral_r2 / content_r2, 3), "x\n")
+  cat("Parent paper reported: 1.22x (Pol), 1.55x (News), 1.42x (Act)\n")
+
+  r2_df
+}
+```
+```{r oos-r2-run}
+oos_r2_results <- list(
+  Politicians = evaluate_oos_r2(df_train$Politicians, "Politicians"),
+  Newspeople  = evaluate_oos_r2(df_train$Newspeople,  "Newspeople"),
+  Activists   = evaluate_oos_r2(df_train$Activists,   "Activists")
+)
+
+save(oos_r2_results, file = "oos_r2_results.RData")
+cat("\nOut-of-sample R² results saved.\n")
+```
+
+# XYZ Implausible Model Test
+
+Sanity check from the parent paper: a model using counts of X, Y, and Z
+letters as predictors should perform worse than the main model and show
+near-zero coefficients.
+```{r xyz-function}
+run_xyz_implausible_test <- function(data, dataset_name) {
+
+  cat("\nXYZ Implausible Model Test:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- data %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  # Main model
+  main_model <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+        EmotionalWords + WordCount + Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  # Implausible model
+  xyz_model <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + XYZCount +
+        EmotionalWords + WordCount + Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("  Main model AIC:        ", round(AIC(main_model), 2), "\n")
+  cat("  Implausible model AIC: ", round(AIC(xyz_model),  2), "\n")
+  cat("  AIC difference (main - implausible):",
+      round(AIC(main_model) - AIC(xyz_model), 2),
+      "(negative = main model better)\n")
+  cat("  XYZ coefficient:", round(fixef(xyz_model)["XYZCount"], 6),
+      "(should be near zero)\n")
+
+  list(main_model = main_model, xyz_model = xyz_model,
+       aic_main   = AIC(main_model), aic_xyz = AIC(xyz_model),
+       xyz_coef   = fixef(xyz_model)["XYZCount"])
+}
+```
+```{r xyz-run}
+xyz_results <- list(
+  Politicians = run_xyz_implausible_test(df_train$Politicians, "Politicians"),
+  Newspeople  = run_xyz_implausible_test(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_xyz_implausible_test(df_train$Activists,   "Activists")
+)
+
+save(xyz_results, file = "xyz_results.RData")
+cat("\nXYZ implausible model results saved.\n")
+```
+
+# Source Hate Robustness Check
+
+Tests whether the moral language effect persists after controlling for
+whether the source tweet itself was hateful.
+```{r source-hate-function}
+run_source_hate_check <- function(data, dataset_name) {
+
+  cat("\nSource Hate Robustness Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- data %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+        EmotionalWords + WordCount + Quote + SourceHate + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  Coefficients:\n")
+  print(round(summary(m)$coefficients, 4))
+  cat("\n  MoralWords coef with SourceHate control:",
+      round(fixef(m)["MoralWords"], 4), "\n")
+
+  m
+}
+```
+```{r source-hate-run}
+source_hate_results <- list(
+  Politicians = run_source_hate_check(df_train$Politicians, "Politicians"),
+  Newspeople  = run_source_hate_check(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_source_hate_check(df_train$Activists,   "Activists")
+)
+
+save(source_hate_results, file = "source_hate_results.RData")
+cat("\nSource hate robustness results saved.\n")
+```
+
+# Retweet Count Robustness Check
+
+Tests whether the moral language effect persists after controlling for
+social influence (retweet count). Uses standardised predictors.
+```{r retweet-function}
+run_retweet_check <- function(data, dataset_name) {
+
+  cat("\nRetweet Robustness Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- scale_df(data) %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexityZ + MoralWordsZ +
+        MoralEmotionalWordsZ + EmotionalWordsZ + WordCountZ +
+        Quote + RetweetCountZ + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  Coefficients:\n")
+  print(round(summary(m)$coefficients, 4))
+  cat("\n  MoralWordsZ coef with retweet control:",
+      round(fixef(m)["MoralWordsZ"], 4), "\n")
+  cat("  RetweetCountZ coef:",
+      round(fixef(m)["RetweetCountZ"], 4), "\n")
+
+  m
+}
+```
+```{r retweet-run}
+retweet_results <- list(
+  Politicians = run_retweet_check(df_train$Politicians, "Politicians"),
+  Newspeople  = run_retweet_check(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_retweet_check(df_train$Activists,   "Activists")
+)
+
+save(retweet_results, file = "retweet_results.RData")
+cat("\nRetweet robustness results saved.\n")
+```
+
+# Like Count Robustness Check
+
+Tests whether the moral language effect persists after controlling for
+engagement (like count). Uses standardised predictors.
+```{r likes-function}
+run_likes_check <- function(data, dataset_name) {
+
+  cat("\nLike Count Robustness Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- scale_df(data) %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexityZ + MoralWordsZ +
+        MoralEmotionalWordsZ + EmotionalWordsZ + WordCountZ +
+        Quote + LikeCountZ + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  Coefficients:\n")
+  print(round(summary(m)$coefficients, 4))
+  cat("\n  MoralWordsZ coef with like count control:",
+      round(fixef(m)["MoralWordsZ"], 4), "\n")
+  cat("  LikeCountZ coef:",
+      round(fixef(m)["LikeCountZ"], 4), "\n")
+
+  m
+}
+```
+```{r likes-run}
+likes_results <- list(
+  Politicians = run_likes_check(df_train$Politicians, "Politicians"),
+  Newspeople  = run_likes_check(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_likes_check(df_train$Activists,   "Activists")
+)
+
+save(likes_results, file = "likes_results.RData")
+cat("\nLike count robustness results saved.\n")
+```
+
+# Directed vs Generalised Hate Speech
+
+Tests whether the moral language effect holds separately for directed
+(second-person) and generalised (third-person) hate speech.
+```{r directed-generalised-function}
+run_directed_generalised <- function(data, dataset_name) {
+
+  cat("\nDirected vs Generalised Hate Speech:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- data %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  # Directed hate (second-person)
+  cat("  Fitting directed model...\n")
+  m_directed <- suppressWarnings(
+    glmer(
+      cbind(HRepliesDirected, Replies - HRepliesDirected) ~
+        MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+        EmotionalWords + WordCount + Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  # Generalised hate (third-person)
+  cat("  Fitting generalised model...\n")
+  m_generalised <- suppressWarnings(
+    glmer(
+      cbind(HRepliesGeneralized, Replies - HRepliesGeneralized) ~
+        MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+        EmotionalWords + WordCount + Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  Directed hate - MoralWords coef:",
+      round(fixef(m_directed)["MoralWords"], 4), "\n")
+  cat("  Generalised hate - MoralWords coef:",
+      round(fixef(m_generalised)["MoralWords"], 4), "\n")
+
+  list(directed = m_directed, generalised = m_generalised)
+}
+```
+```{r directed-generalised-run}
+directed_results <- list(
+  Politicians = run_directed_generalised(df_train$Politicians, "Politicians"),
+  Newspeople  = run_directed_generalised(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_directed_generalised(df_train$Activists,   "Activists")
+)
+
+save(directed_results, file = "directed_results.RData")
+cat("\nDirected vs generalised hate speech results saved.\n")
+```
+
+# Word Proportions Robustness Check
+
+Tests whether using word proportions (moral words / total words) instead
+of raw counts changes the substantive conclusions.
+```{r proportions-function}
+run_proportions_check <- function(data, dataset_name) {
+
+  cat("\nWord Proportions Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- add_proportions(data) %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + MoralWordsProp +
+        MoralEmotionalWordsProp + EmotionalWordsProp + WordCount +
+        Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  MoralWordsProp coef:",
+      round(fixef(m)["MoralWordsProp"], 4), "\n")
+  cat("  MoralEmotionalWordsProp coef:",
+      round(fixef(m)["MoralEmotionalWordsProp"], 4), "\n")
+
+  m
+}
+```
+```{r proportions-run}
+proportions_results <- list(
+  Politicians = run_proportions_check(df_train$Politicians, "Politicians"),
+  Newspeople  = run_proportions_check(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_proportions_check(df_train$Activists,   "Activists")
+)
+
+save(proportions_results, file = "proportions_results.RData")
+cat("\nProportions robustness results saved.\n")
+```
+
+# Binary Moral Words Robustness Check
+
+Tests whether the effect holds when moral language is treated as a binary
+presence/absence indicator rather than a count.
+```{r binary-function}
+run_binary_check <- function(data, dataset_name) {
+
+  cat("\nBinary Moral Words Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- add_binary(data) %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + MoralBinary +
+        MoralEmotionalBinary + EmotionalWords + WordCount +
+        Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  MoralBinary coef:",
+      round(fixef(m)["MoralBinaryTRUE"], 4), "\n")
+  cat("  MoralEmotionalBinary coef:",
+      round(fixef(m)["MoralEmotionalBinaryTRUE"], 4), "\n")
+
+  m
+}
+```
+```{r binary-run}
+binary_results <- list(
+  Politicians = run_binary_check(df_train$Politicians, "Politicians"),
+  Newspeople  = run_binary_check(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_binary_check(df_train$Activists,   "Activists")
+)
+
+save(binary_results, file = "binary_results.RData")
+cat("\nBinary moral words results saved.\n")
+```
+
+# Positive and Negative Emotional Words
+
+Tests whether separating emotional words into positive and negative
+components changes the moral language effect estimates.
+```{r distinct-emotions-function}
+run_distinct_emotions <- function(data, dataset_name) {
+
+  cat("\nDistinct Emotions Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- data %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+        EmotionalPositive + EmotionalNegative + WordCount +
+        Quote + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  Coefficients:\n")
+  print(round(summary(m)$coefficients, 4))
+
+  m
+}
+```
+```{r distinct-emotions-run}
+distinct_emotions_results <- list(
+  Politicians = run_distinct_emotions(df_train$Politicians, "Politicians"),
+  Newspeople  = run_distinct_emotions(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_distinct_emotions(df_train$Activists,   "Activists")
+)
+
+save(distinct_emotions_results, file = "distinct_emotions_results.RData")
+cat("\nDistinct emotions results saved.\n")
+```
+
+# Interaction Effects
+
+Tests whether moral words interact with word count — i.e., whether the
+effect of moral language depends on tweet length.
+```{r interactions-function}
+run_interactions_check <- function(data, dataset_name) {
+
+  cat("\nInteraction Effects Check:", dataset_name,
+      "| n =", nrow(data), "\n")
+
+  df <- data %>%
+    mutate(MediaAttached = as.numeric(MediaAttached),
+           Quote         = as.numeric(Quote)) %>%
+    filter(!is.na(ProportionOfHate), Replies > 0)
+
+  m <- suppressWarnings(
+    glmer(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords +
+        EmotionalWords + WordCount + Quote +
+        MoralWords:WordCount + MoralEmotionalWords:WordCount + (1 | UserID),
+      data    = df,
+      family  = binomial(link = "logit"),
+      control = glmm_control,
+      nAGQ    = 1
+    )
+  )
+
+  cat("\n  Coefficients:\n")
+  print(round(summary(m)$coefficients, 4))
+  cat("\n  MoralWords:WordCount interaction coef:",
+      round(fixef(m)["MoralWords:WordCount"], 6), "\n")
+
+  m
+}
+```
+```{r interactions-run}
+interaction_results <- list(
+  Politicians = run_interactions_check(df_train$Politicians, "Politicians"),
+  Newspeople  = run_interactions_check(df_train$Newspeople,  "Newspeople"),
+  Activists   = run_interactions_check(df_train$Activists,   "Activists")
+)
+
+save(interaction_results, file = "interaction_results.RData")
+cat("\nInteraction effects results saved.\n")
+```
+
+# Robustness Summary
+```{r robustness-summary}
+cat("\n", rep("=", 55), "\n", sep = "")
+cat("ROBUSTNESS SUMMARY\n")
+cat(rep("=", 55), "\n\n", sep = "")
+
+datasets <- c("Politicians", "Newspeople", "Activists")
+
+# Main model MoralWords coefficients for reference
+cat("Main model MoralWords coefficients (from XYZ check):\n")
+for (nm in datasets) {
+  m <- xyz_results[[nm]]$main_model
+  if (!is.null(m))
+    cat(" ", nm, ":", round(fixef(m)["MoralWords"], 4), "\n")
+}
+
+cat("\nMoralWords coefficients across robustness checks:\n\n")
+
+checks <- list(
+  "Source hate control" = lapply(source_hate_results,
+    function(m) if (!is.null(m)) round(fixef(m)["MoralWords"], 4) else NA),
+  "Retweet control" = lapply(retweet_results,
+    function(m) if (!is.null(m)) round(fixef(m)["MoralWordsZ"], 4) else NA),
+  "Like count control" = lapply(likes_results,
+    function(m) if (!is.null(m)) round(fixef(m)["MoralWordsZ"], 4) else NA),
+  "Word proportions" = lapply(proportions_results,
+    function(m) if (!is.null(m)) round(fixef(m)["MoralWordsProp"], 4) else NA),
+  "Binary indicator" = lapply(binary_results,
+    function(m) if (!is.null(m)) round(fixef(m)["MoralBinaryTRUE"], 4) else NA),
+  "Directed hate" = lapply(directed_results,
+    function(x) if (!is.null(x$directed)) round(fixef(x$directed)["MoralWords"], 4) else NA),
+  "Generalised hate" = lapply(directed_results,
+    function(x) if (!is.null(x$generalised)) round(fixef(x$generalised)["MoralWords"], 4) else NA)
+)
+
+summary_df <- do.call(rbind, lapply(names(checks), function(check_name) {
+  data.frame(
+    Check       = check_name,
+    Politicians = checks[[check_name]][["Politicians"]],
+    Newspeople  = checks[[check_name]][["Newspeople"]],
+    Activists   = checks[[check_name]][["Activists"]],
+    stringsAsFactors = FALSE
+  )
+}))
+
+print(summary_df, row.names = FALSE, digits = 4)
+
+cat("\nOut-of-sample R² improvement (moral vs content model):\n")
+for (nm in datasets) {
+  r2_df <- oos_r2_results[[nm]]
+  ratio <- r2_df$Moral_vs_Content_ratio[
+    r2_df$Specification == "Author + Content + Moral"
+  ]
+  cat(" ", nm, ":", round(ratio, 3), "x",
+      "(paper reported:", c("1.22x", "1.55x", "1.42x")[match(nm, datasets)], ")\n")
+}
+
+cat("\n", rep("=", 55), "\n", sep = "")
+cat("ALL SUPPLEMENT ANALYSES COMPLETE\n")
+cat(rep("=", 55), "\n", sep = "")
+
+save.image("supplements_workspace.RData")
+cat("Full workspace saved.\n")
+```
