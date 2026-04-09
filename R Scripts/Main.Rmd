@@ -1,0 +1,1638 @@
+---
+title: "Moralized Language Predicts Hate Speech (Main Paper)"
+author: KS
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+header-includes:
+   - \usepackage{dcolumn}
+   - \usepackage{booktabs}
+   - \usepackage{float}
+   - \usepackage{longtable}
+   - \usepackage{multirow}
+   - \usepackage{siunitx}
+output:
+  pdf_document:
+    toc: yes
+    keep_tex: no
+    number_sections: yes
+---
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lme4)
+library(texreg)
+library(xtable)
+library(broom)
+library(broom.mixed)
+library(lubridate)
+library(wesanderson)
+library(car)
+library(furrr)
+library(glmmTMB)
+library(mgcv)
+library(ranger)
+
+options(xtable.comment = FALSE, width = 80, scipen = 999)
+plan(multisession, workers = parallel::detectCores() / 2)
+source("utils.R")
+```
+
+```{r paths}
+inputPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/"
+splitPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/split_output/"
+graphPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/Graphs/"
+rdataPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/R Data/"
+```
+
+```{r load-data}
+load_dataset <- function(path, label) {
+  read_csv(path, show_col_types = FALSE) %>%
+    mutate(UserID     = factor(UserID),
+           SourceHate = factor(SourceHate),
+           Dataset    = label)
+}
+
+df_list <- list(
+  Politicians = load_dataset(paste0(inputPath, "df_politicians.csv"), "Politicians"),
+  Newspeople  = load_dataset(paste0(inputPath, "df_newspeople.csv"),  "Newspeople"),
+  Activists   = load_dataset(paste0(inputPath, "df_activists.csv"),   "Activists")
+)
+
+df_train <- list(
+  Politicians = load_dataset(paste0(splitPath, "df_politicians_train.csv"), "Politicians"),
+  Newspeople  = load_dataset(paste0(splitPath, "df_newspeople_train.csv"),  "Newspeople"),
+  Activists   = load_dataset(paste0(splitPath, "df_activists_train.csv"),   "Activists")
+)
+
+df_test <- list(
+  Politicians = load_dataset(paste0(splitPath, "df_politicians_test.csv"), "Politicians"),
+  Newspeople  = load_dataset(paste0(splitPath, "df_newspeople_test.csv"),  "Newspeople"),
+  Activists   = load_dataset(paste0(splitPath, "df_activists_test.csv"),   "Activists")
+)
+
+cat("Training set sizes:\n")
+walk2(df_train, names(df_train), ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
+cat("Test set sizes:\n")
+walk2(df_test,  names(df_test),  ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
+```
+
+# Functions
+```{r functions}
+plot_ccdf_dfs <- function(df, selected, y_min = 0.001, y_max = 1,
+                          label_fun_x = NA, legend_position = c(0.72, 0.72),
+                          breaks = c(0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 1),
+                          ordering = NULL, colors = NULL, label_x = "Moral Language",
+                          xlim_n = NULL, grouping_var = NULL, rounding = 1) {
+  df %>%
+    mutate(!!grouping_var := fct_relevel(factor(get(grouping_var)), ordering)) %>%
+    group_by(Dataset) %>%
+    group_modify(~ ccdf(.x %>% pull(selected))) %>%
+    arrange(x) %>%
+    mutate(y = lag(y, default = 1)) %>%
+    ungroup() %>%
+    ggplot(aes(x = x, y = y, group = Dataset, color = Dataset)) +
+    geom_line(size = 2) +
+    scale_y_continuous(labels = as.character(breaks * 100), trans = "log10",
+                       breaks = breaks, limits = c(y_min, y_max), expand = c(0, 0)) +
+    scale_x_continuous() +
+    scale_colour_manual(values = colors) +
+    labs(y = "CCDF (%)", x = label_x) +
+    theme(legend.direction = "vertical", legend.position = legend_position,
+          legend.spacing.x = unit(0.1, "cm"), legend.spacing.y = unit(0.1, "cm")) +
+    xlim(xlim_n)
+}
+
+vnames_list <- c(
+  "(Intercept)"         = "Intercept",
+  "TextComplexity"      = "Text Complexity",
+  "MoralWords"          = "Moral Words",
+  "MoralEmotionalWords" = "Moral-Emotional Words",
+  "EmotionalWords"      = "Emotional Words",
+  "WordCount"           = "Word Count",
+  "QuoteTRUE"           = "Quote (binary)"
+)
+```
+
+# CCDF Plots
+```{r ccdf-plots}
+ccdf_colors <- wes_palette("Darjeeling1")[3:1]
+ccdf_breaks <- c(0.0001, 0.001, 0.01, 0.1, 1)
+df_combined <- bind_rows(df_list)
+
+plot_ccdf_moral <- plot_ccdf_dfs(
+  df = df_combined, selected = "MoralWords", label_x = "Moral Words",
+  ordering = names(df_list), colors = ccdf_colors, xlim_n = c(0, 9),
+  y_min = 0.0001, breaks = ccdf_breaks, legend_position = c(0.3, 0.3),
+  grouping_var = "Dataset"
+) + scale_x_continuous(breaks = c(0, 2, 4, 6, 8)) + coord_cartesian(xlim = c(0, 9))
+
+plot_ccdf_moralemo <- plot_ccdf_dfs(
+  df = df_combined, selected = "MoralEmotionalWords",
+  label_x = "Moral-Emotional Words", ordering = names(df_list),
+  colors = ccdf_colors, xlim_n = c(0, 6), y_min = 0.0001,
+  breaks = ccdf_breaks, legend_position = c(0.3, 0.3), grouping_var = "Dataset"
+)
+
+plot_ccdf_hpu <- plot_ccdf_dfs(
+  df = df_combined %>%
+    group_by(Dataset, UserID) %>%
+    summarise(HpU = mean(ProportionOfHate), .groups = "drop"),
+  selected = "HpU", label_x = "Mean Share of Hateful Replies (per User)",
+  ordering = names(df_list), colors = ccdf_colors, xlim_n = c(0, 0.2),
+  breaks = ccdf_breaks, legend_position = c(0.75, 0.75), grouping_var = "Dataset"
+)
+
+print(plot_ccdf_moral)
+print(plot_ccdf_moralemo)
+print(plot_ccdf_hpu)
+
+ggsave(plot_ccdf_moral,    file = paste0(graphPath, "CCDF_moral_words_by_df.pdf"),
+       width = 16, height = 12, units = "cm")
+ggsave(plot_ccdf_moralemo, file = paste0(graphPath, "CCDF_moralemotional_words_by_df.pdf"),
+       width = 16, height = 12, units = "cm")
+ggsave(plot_ccdf_hpu,      file = paste0(graphPath, "CCDF_HpU_df.pdf"),
+       width = 16, height = 12, units = "cm")
+```
+
+# Alternative Model Specifications
+```{r sample-for-dev, include=FALSE}
+# Set to NULL to use full training data.
+DEV_SAMPLE <- NULL
+
+df_train_sample <- if (!is.null(DEV_SAMPLE)) {
+  map(df_train, ~ slice_sample(.x, n = min(DEV_SAMPLE, nrow(.x))))
+} else {
+  df_train
+}
+
+cat("Sample sizes used for model fitting:\n")
+walk2(df_train_sample, names(df_train_sample),
+      ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
+```
+
+<!--
+ZIBB was attempted but abandoned due to non-identifiable zero-inflation
+component across all three datasets. The zero-inflation random effect variance
+collapsed to near-zero for Newspeople, indicating structural zeros are not
+present in the data. Plain beta-binomial used instead.
+```{r zibb-commented}
+fit_zibb <- function(data, name) {
+  cat("\nFitting ZIBB:", name, "| n =", nrow(data),
+      "| started:", format(Sys.time(), "%H:%M:%S"), "\n")
+  start <- Sys.time()
+  m <- tryCatch(
+    glmmTMB(
+      formula   = cbind(HReplies, Replies - HReplies) ~
+                    MediaAttached + TextComplexity + MoralWords +
+                    MoralEmotionalWords + EmotionalWords + WordCount +
+                    Quote + (1 | UserID),
+      ziformula = ~ MediaAttached + MoralWords + MoralEmotionalWords,
+      data      = data,
+      family    = betabinomial(link = "logit"),
+      control   = glmmTMBControl(optCtrl = list(iter.max = 1e5, eval.max = 1e5))
+    ),
+    error = function(e) { cat("ERROR:", e$message, "\n"); NULL }
+  )
+  cat("Completed in", round(difftime(Sys.time(), start, units = "mins"), 2), "mins\n")
+  m
+}
+zibb_models <- imap(df_train_sample, fit_zibb)
+```
+-->
+
+## Model 1: Beta-Binomial
+```{r bb-fit}
+fit_bb <- function(data, name) {
+  cat("\nFitting BB:", name, "| n =", nrow(data),
+      "| started:", format(Sys.time(), "%H:%M:%S"), "\n")
+  start <- Sys.time()
+
+  m <- tryCatch(
+    glmmTMB(
+      formula = cbind(HReplies, Replies - HReplies) ~
+                  MediaAttached + TextComplexity + MoralWords +
+                  MoralEmotionalWords + EmotionalWords + WordCount +
+                  Quote + (1 | UserID),
+      data    = data,
+      family  = betabinomial(link = "logit"),
+      control = glmmTMBControl(optCtrl = list(iter.max = 1e5, eval.max = 1e5))
+    ),
+    error = function(e) { cat("ERROR:", e$message, "\n"); NULL }
+  )
+
+  cat("Completed in",
+      round(difftime(Sys.time(), start, units = "mins"), 2), "mins\n")
+  m
+}
+
+bb_models <- imap(df_train_sample, fit_bb)
+save(bb_models, file = paste0(rdataPath, "bb_models.RData"))
+
+cat("\n===== BB Summaries =====\n")
+iwalk(bb_models, function(m, nm) {
+  if (!is.null(m)) { cat("\n--", nm, "--\n"); print(summary(m)) }
+})
+```
+
+## BB Cross-Validation
+```{r bb-cv}
+evaluate_bb_cv <- function(data, dataset_name, seed = 123) {
+
+  cat("\nBB CV Evaluation:", dataset_name,
+      "| n =", nrow(data), "\n")
+  set.seed(seed)
+
+  df <- data %>%
+    mutate(
+      .y_num   = HReplies,
+      .y_denom = Replies - HReplies,
+      .prop    = HReplies / Replies,
+      UserID   = factor(UserID)
+    ) %>%
+    filter(!is.na(.prop), Replies > 0)
+
+  user_ids <- levels(df$UserID)
+  fold_map <- setNames(
+    sample(rep(seq_len(5), length.out = length(user_ids))),
+    user_ids
+  )
+  df$fold <- fold_map[as.character(df$UserID)]
+
+  fold_metrics <- data.frame(fold = integer(0), rmse = numeric(0),
+                              mae  = numeric(0), r2   = numeric(0),
+                              loglik = numeric(0))
+
+  for (k in seq_len(5)) {
+    cat("  Fold", k, "| started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+    train <- df[df$fold != k, ]
+    test  <- df[df$fold == k, ]
+
+    m_cv <- tryCatch(
+      glmmTMB(
+        formula = cbind(.y_num, .y_denom) ~
+                    MediaAttached + TextComplexity + MoralWords +
+                    MoralEmotionalWords + EmotionalWords + WordCount +
+                    Quote + (1 | UserID),
+        data    = train,
+        family  = betabinomial(link = "logit"),
+        control = glmmTMBControl(optCtrl = list(iter.max = 1e5, eval.max = 1e5))
+      ),
+      error = function(e) { cat("  ERROR fold", k, ":", e$message, "\n"); NULL }
+    )
+    if (is.null(m_cv)) next
+
+    pred <- tryCatch(
+      predict(m_cv, newdata = test, type = "response",
+              allow.new.levels = TRUE),
+      error = function(e) { cat("  Predict error fold", k, "\n"); NULL }
+    )
+    if (is.null(pred)) next
+
+    pred   <- pmax(0, pmin(1, pred))
+    actual <- test$.prop
+    ss_res <- sum((actual - pred)^2,         na.rm = TRUE)
+    ss_tot <- sum((actual - mean(actual))^2, na.rm = TRUE)
+    rmse_k <- sqrt(mean((actual - pred)^2,   na.rm = TRUE))
+    mae_k  <- mean(abs(actual - pred),        na.rm = TRUE)
+    r2_k   <- 1 - ss_res / ss_tot
+    ll_k   <- as.numeric(logLik(m_cv))
+
+    cat("    RMSE:", round(rmse_k, 5),
+        "| MAE:",   round(mae_k,  5),
+        "| R2:",    round(r2_k,   4),
+        "| logLik:", round(ll_k,  2), "\n")
+
+    fold_metrics <- rbind(fold_metrics,
+                          data.frame(fold = k, rmse = rmse_k,
+                                     mae = mae_k, r2 = r2_k, loglik = ll_k))
+  }
+
+  cat("  ── BB CV Summary:", dataset_name, "──\n")
+  cat("  Mean RMSE:", round(mean(fold_metrics$rmse), 5),
+      "(SD:", round(sd(fold_metrics$rmse), 5), ")\n")
+  cat("  Mean MAE :", round(mean(fold_metrics$mae),  5),
+      "(SD:", round(sd(fold_metrics$mae),  5), ")\n")
+  cat("  Mean R2  :", round(mean(fold_metrics$r2),   4),
+      "(SD:", round(sd(fold_metrics$r2),   4), ")\n")
+
+  list(fold_metrics = fold_metrics,
+       mean_rmse    = mean(fold_metrics$rmse),
+       mean_mae     = mean(fold_metrics$mae),
+       mean_r2      = mean(fold_metrics$r2))
+}
+
+bb_cv_results <- list(
+  Politicians = evaluate_bb_cv(df_train$Politicians, "Politicians"),
+  Newspeople  = evaluate_bb_cv(df_train$Newspeople,  "Newspeople"),
+  Activists   = evaluate_bb_cv(df_train$Activists,   "Activists")
+)
+
+save(bb_cv_results, file = paste0(rdataPath, "bb_cv_results.RData"))
+cat("\nBB CV complete and saved.\n")
+```
+
+## Model 2: Generalized Additive Mixed Model
+```{r gamm-fit}
+get_k <- function(data, var, max_k = 10) {
+  min(max_k, floor(length(unique(data[[var]])) / 2), 10)
+}
+
+fit_gamm <- function(data, name) {
+  cat("\nFitting GAMM:", name, "| n =", nrow(data),
+      "| started:", format(Sys.time(), "%H:%M:%S"), "\n")
+  start <- Sys.time()
+
+  k_vals <- sapply(
+    c("TextComplexity", "MoralWords", "MoralEmotionalWords",
+      "EmotionalWords", "WordCount"),
+    get_k, data = data
+  )
+  cat("  k values:", k_vals, "\n")
+
+  m <- tryCatch(
+    gam(
+      cbind(HReplies, Replies - HReplies) ~
+        MediaAttached +
+        s(TextComplexity,      k = k_vals["TextComplexity"]) +
+        s(MoralWords,          k = k_vals["MoralWords"]) +
+        s(MoralEmotionalWords, k = k_vals["MoralEmotionalWords"]) +
+        s(EmotionalWords,      k = k_vals["EmotionalWords"]) +
+        s(WordCount,           k = k_vals["WordCount"]) +
+        Quote + s(UserID, bs = "re"),
+      data   = data,
+      family = binomial(link = "logit"),
+      method = "REML"
+    ),
+    error = function(e) {
+      cat("Smooth model failed:", e$message, "\nTrying linear fallback...\n")
+      tryCatch(
+        gam(
+          cbind(HReplies, Replies - HReplies) ~
+            MediaAttached + TextComplexity + MoralWords +
+            MoralEmotionalWords + EmotionalWords + WordCount +
+            Quote + s(UserID, bs = "re"),
+          data = data, family = binomial(link = "logit"), method = "REML"
+        ),
+        error = function(e2) { cat("Fallback failed:", e2$message, "\n"); NULL }
+      )
+    }
+  )
+
+  cat("Completed in", round(difftime(Sys.time(), start, units = "mins"), 2), "mins\n")
+  m
+}
+
+gamm_models <- imap(df_train_sample, fit_gamm)
+save(gamm_models, file = paste0(rdataPath, "gamm_models.RData"))
+
+cat("\n===== GAMM Smooth Term Summaries =====\n")
+iwalk(gamm_models, function(m, nm) {
+  if (!is.null(m)) {
+    cat("\n--", nm, "--\n")
+    print(summary(m)$s.table)
+  }
+})
+```
+
+## GAMM Cross-Validation
+```{r gamm-cv}
+evaluate_gamm_cv <- function(data, dataset_name, seed = 123) {
+
+  cat("\nGAMM CV Evaluation:", dataset_name,
+      "| n =", nrow(data), "\n")
+  set.seed(seed)
+
+  df <- data %>%
+    mutate(UserID = factor(UserID),
+           .prop  = HReplies / Replies) %>%
+    filter(!is.na(.prop), Replies > 0)
+
+  user_ids <- levels(df$UserID)
+  fold_map <- setNames(
+    sample(rep(seq_len(5), length.out = length(user_ids))),
+    user_ids
+  )
+  df$fold <- fold_map[as.character(df$UserID)]
+
+  fold_metrics <- data.frame(fold = integer(0), rmse = numeric(0),
+                              mae  = numeric(0), r2   = numeric(0),
+                              dev_expl = numeric(0))
+
+  for (k in seq_len(5)) {
+    cat("  Fold", k, "| started:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+    train <- df[df$fold != k, ]
+    test  <- df[df$fold == k, ]
+
+    k_vals <- sapply(
+      c("TextComplexity", "MoralWords", "MoralEmotionalWords",
+        "EmotionalWords", "WordCount"),
+      get_k, data = train
+    )
+    cat("    k values:", k_vals, "\n")
+
+    m_cv <- tryCatch(
+      gam(
+        cbind(HReplies, Replies - HReplies) ~
+          MediaAttached +
+          s(TextComplexity,      k = k_vals["TextComplexity"]) +
+          s(MoralWords,          k = k_vals["MoralWords"]) +
+          s(MoralEmotionalWords, k = k_vals["MoralEmotionalWords"]) +
+          s(EmotionalWords,      k = k_vals["EmotionalWords"]) +
+          s(WordCount,           k = k_vals["WordCount"]) +
+          Quote + s(UserID, bs = "re"),
+        data   = train,
+        family = binomial(link = "logit"),
+        method = "REML"
+      ),
+      error = function(e) {
+        cat("    ERROR fold", k, ":", e$message, "\n")
+        cat("    Trying linear fallback...\n")
+        tryCatch(
+          gam(
+            cbind(HReplies, Replies - HReplies) ~
+              MediaAttached + TextComplexity + MoralWords +
+              MoralEmotionalWords + EmotionalWords + WordCount +
+              Quote + s(UserID, bs = "re"),
+            data = train, family = binomial(link = "logit"), method = "REML"
+          ),
+          error = function(e2) { cat("    Fallback ERROR:", e2$message, "\n"); NULL }
+        )
+      }
+    )
+    if (is.null(m_cv)) next
+
+    pred <- tryCatch(
+      predict(m_cv, newdata = test, type = "response",
+              exclude = "s(UserID)"),
+      error = function(e) { cat("    Predict error fold", k, "\n"); NULL }
+    )
+    if (is.null(pred)) next
+
+    pred   <- pmax(0, pmin(1, pred))
+    actual <- test$.prop
+    ss_res <- sum((actual - pred)^2,         na.rm = TRUE)
+    ss_tot <- sum((actual - mean(actual))^2, na.rm = TRUE)
+    rmse_k <- sqrt(mean((actual - pred)^2,   na.rm = TRUE))
+    mae_k  <- mean(abs(actual - pred),        na.rm = TRUE)
+    r2_k   <- 1 - ss_res / ss_tot
+    dev_k  <- summary(m_cv)$dev.expl
+
+    cat("    RMSE:", round(rmse_k, 5),
+        "| MAE:",    round(mae_k,  5),
+        "| R2:",     round(r2_k,   4),
+        "| Dev expl:", round(dev_k * 100, 2), "%\n")
+
+    fold_metrics <- rbind(fold_metrics,
+                          data.frame(fold = k, rmse = rmse_k, mae = mae_k,
+                                     r2 = r2_k, dev_expl = dev_k))
+  }
+
+  cat("  ── GAMM CV Summary:", dataset_name, "──\n")
+  cat("  Mean RMSE:", round(mean(fold_metrics$rmse), 5),
+      "(SD:", round(sd(fold_metrics$rmse), 5), ")\n")
+  cat("  Mean MAE :", round(mean(fold_metrics$mae),  5),
+      "(SD:", round(sd(fold_metrics$mae),  5), ")\n")
+  cat("  Mean R2  :", round(mean(fold_metrics$r2),   4),
+      "(SD:", round(sd(fold_metrics$r2),   4), ")\n")
+  cat("  Mean Dev:", round(mean(fold_metrics$dev_expl) * 100, 4), "%\n")
+
+  list(fold_metrics = fold_metrics,
+       mean_rmse    = mean(fold_metrics$rmse),
+       mean_mae     = mean(fold_metrics$mae),
+       mean_r2      = mean(fold_metrics$r2),
+       mean_dev     = mean(fold_metrics$dev_expl))
+}
+
+gamm_cv_results <- list(
+  Politicians = evaluate_gamm_cv(df_train$Politicians, "Politicians"),
+  Newspeople  = evaluate_gamm_cv(df_train$Newspeople,  "Newspeople"),
+  Activists   = evaluate_gamm_cv(df_train$Activists,   "Activists")
+)
+
+save(gamm_cv_results, file = paste0(rdataPath, "gamm_cv_results.RData"))
+cat("\nGAMM CV complete and saved.\n")
+```
+
+## Model 3: Generalized Mixed Effects Random Forest
+```{r gmerf-function}
+fit_gmerf <- function(data,
+                      dataset_name,
+                      outcome_col   = "ProportionOfHate",
+                      weight_col    = "Replies",
+                      cluster_col   = "UserID",
+                      predictors    = c("MediaAttached", "TextComplexity",
+                                        "MoralWords", "MoralEmotionalWords",
+                                        "EmotionalWords", "WordCount", "Quote"),
+                      max_iter      = 20,
+                      tol           = 1e-2,
+                      num_trees     = 500,
+                      min_node_size = 5,
+                      seed          = 123) {
+
+  cat("\n", rep("=", 55), "\n", sep = "")
+  cat("GMERF:", dataset_name, "| n =", nrow(data),
+      "| clusters =", length(unique(data[[cluster_col]])), "\n")
+  cat(rep("=", 55), "\n", sep = "")
+
+  set.seed(seed)
+
+  df <- data
+  for (p in predictors) {
+    if (p %in% names(df) && is.logical(df[[p]])) df[[p]] <- as.numeric(df[[p]])
+  }
+  df[[".cluster"]] <- factor(df[[cluster_col]])
+  df[[".weight"]]  <- df[[weight_col]]
+  df[[".y"]]       <- df[[outcome_col]]
+
+  keep <- c(".y", ".weight", ".cluster", predictors)
+  df   <- df[complete.cases(df[, keep[keep %in% names(df)]]), ]
+
+  cluster_id <- df[[".cluster"]]
+  weights    <- df[[".weight"]] / mean(df[[".weight"]])
+  y          <- df[[".y"]]
+
+  b_hat     <- setNames(rep(0.0, length(levels(cluster_id))), levels(cluster_id))
+  ll_prev   <- -Inf
+  converged <- FALSE
+  iter_log  <- data.frame(iter = integer(0), rf_oob_rmse = numeric(0),
+                           re_var = numeric(0), resid_var = numeric(0),
+                           log_lik = numeric(0), delta_ll = numeric(0))
+  rf_model  <- NULL
+  lmm_model <- NULL
+
+  rf_formula <- as.formula(paste(".y_star ~", paste(predictors, collapse = " + ")))
+
+  for (iter in seq_len(max_iter)) {
+
+    cat("  Iter", iter, "|", format(Sys.time(), "%H:%M:%S"), "\n")
+
+    b_vec              <- b_hat[as.character(cluster_id)]
+    b_vec[is.na(b_vec)] <- 0
+    rf_df              <- df[, predictors, drop = FALSE]
+    rf_df[[".y_star"]] <- y - b_vec
+
+    rf_model <- ranger(
+      formula       = rf_formula,
+      data          = rf_df,
+      num.trees     = num_trees,
+      min.node.size = min_node_size,
+      importance    = "impurity",
+      case.weights  = weights,
+      seed          = seed,
+      num.threads   = parallel::detectCores() - 1
+    )
+
+    f_hat <- predict(rf_model, data = rf_df)$predictions
+    e_hat <- y - f_hat
+
+    lmm_model <- tryCatch(
+      suppressWarnings(
+        lmer(.e ~ 1 + (1 | .cluster),
+             data    = data.frame(.e = e_hat, .cluster = cluster_id,
+                                  .w = weights),
+             weights = .w,
+             REML    = FALSE,
+             control = lmerControl(optimizer = "bobyqa",
+                                   optCtrl   = list(maxfun = 1e5)))
+      ),
+      error = function(e) {
+        cat("    [LMM error iter", iter, "]:", conditionMessage(e), "\n")
+        NULL
+      }
+    )
+    if (is.null(lmm_model)) break
+
+    re_vals <- ranef(lmm_model)[[".cluster"]]
+    b_hat[] <- 0
+    matched <- intersect(rownames(re_vals), names(b_hat))
+    b_hat[matched] <- re_vals[matched, "(Intercept)"]
+
+    ll_curr   <- as.numeric(logLik(lmm_model))
+    delta_ll  <- abs(ll_curr - ll_prev)
+    vc        <- as.data.frame(VarCorr(lmm_model))
+    re_var    <- vc$vcov[vc$grp == ".cluster"]
+    resid_var <- vc$vcov[vc$grp == "Residual"]
+
+    iter_log <- rbind(iter_log,
+                      data.frame(iter        = iter,
+                                 rf_oob_rmse = sqrt(rf_model$prediction.error),
+                                 re_var      = re_var,
+                                 resid_var   = resid_var,
+                                 log_lik     = ll_curr,
+                                 delta_ll    = delta_ll))
+
+    cat("  | OOB RMSE:", round(sqrt(rf_model$prediction.error), 5),
+        "| RE var:",     round(re_var,    6),
+        "| deltaLogLik:", round(delta_ll, 6), "\n")
+
+    re_var_prev   <- if (iter > 1) iter_log$re_var[iter - 1] else NA
+    re_var_stable <- !is.na(re_var_prev) && abs(re_var - re_var_prev) < 1e-6
+
+    if (iter > 1 && (delta_ll < tol || re_var_stable)) {
+      cat("  Converged at iteration", iter,
+          if (re_var_stable) "(RE variance stable)" else "(deltaLogLik < tol)",
+          "\n")
+      converged <- TRUE
+      break
+    }
+    ll_prev <- ll_curr
+  }
+
+  if (!converged) cat("  Did not converge within", max_iter, "iterations.\n")
+
+  imp_df <- data.frame(
+    variable   = names(rf_model$variable.importance),
+    importance = as.numeric(rf_model$variable.importance)
+  )
+  imp_df <- imp_df[order(imp_df$importance, decreasing = TRUE), ]
+  imp_df$pct <- imp_df$importance / sum(imp_df$importance) * 100
+  rownames(imp_df) <- NULL
+
+  cat("\n  Variable Importance:\n")
+  print(imp_df)
+
+  b_vec_final              <- b_hat[as.character(cluster_id)]
+  b_vec_final[is.na(b_vec_final)] <- 0
+  rmse_final <- sqrt(mean((y - (rf_model$predictions + b_vec_final))^2,
+                          na.rm = TRUE))
+  cat("\n  Final combined RMSE (train):", round(rmse_final, 5), "\n")
+
+  list(rf_model   = rf_model,  lmm_model  = lmm_model,
+       b_hat      = b_hat,     importance = imp_df,
+       iter_log   = iter_log,  converged  = converged,
+       rmse_final = rmse_final, n_iter    = nrow(iter_log))
+}
+```
+```{r gmerf-fit}
+cat("\n", rep("=", 55), "\n", sep = "")
+cat("FITTING GMERF ON FULL TRAINING DATA\n")
+cat(rep("=", 55), "\n\n", sep = "")
+
+gmerf_models <- list(
+  Politicians = fit_gmerf(df_train$Politicians, "Politicians"),
+  Newspeople  = fit_gmerf(df_train$Newspeople,  "Newspeople"),
+  Activists   = fit_gmerf(df_train$Activists,   "Activists")
+)
+
+save(gmerf_models, file = paste0(rdataPath, "gmerf_models.RData"))
+cat("\nGMERF models saved.\n")
+
+cat("\n===== GMERF Summary =====\n")
+iwalk(gmerf_models, function(m, nm) {
+  if (is.null(m)) return()
+  vc <- as.data.frame(VarCorr(m$lmm_model))
+  cat("\n--", nm, "--\n")
+  cat("  Converged  :", m$converged, "| Iterations:", m$n_iter, "\n")
+  cat("  Train RMSE :", round(m$rmse_final, 5), "\n")
+  cat("  RE variance:", round(vc$vcov[vc$grp == ".cluster"], 6), "\n")
+  cat("  Resid var  :", round(vc$vcov[vc$grp == "Residual"],  6), "\n")
+  cat("  Top predictors:\n")
+  print(head(m$importance, 5))
+})
+```
+
+## GMERF Cross-Validation
+```{r gmerf-cv-function}
+evaluate_gmerf_cv <- function(data,
+                               dataset_name,
+                               n_folds    = 5,
+                               predictors = c("MediaAttached", "TextComplexity",
+                                              "MoralWords", "MoralEmotionalWords",
+                                              "EmotionalWords", "WordCount", "Quote"),
+                               seed = 123) {
+
+  cat("\nCV Evaluation:", dataset_name, "\n")
+  set.seed(seed)
+
+  df <- data
+  for (p in predictors) {
+    if (p %in% names(df) && is.logical(df[[p]])) df[[p]] <- as.numeric(df[[p]])
+  }
+  df[[".cluster"]] <- factor(df[["UserID"]])
+  df[[".y"]]       <- df[["ProportionOfHate"]]
+  df[[".weight"]]  <- df[["Replies"]] / mean(df[["Replies"]])
+  df <- df[complete.cases(df[, c(".y", ".weight", ".cluster", predictors)]), ]
+
+  user_ids <- levels(df$.cluster)
+  fold_map <- setNames(
+    sample(rep(seq_len(n_folds), length.out = length(user_ids))),
+    user_ids
+  )
+  df$fold <- fold_map[as.character(df$.cluster)]
+
+  rf_formula   <- as.formula(paste(".y_star ~",
+                                   paste(predictors, collapse = " + ")))
+  fold_metrics <- data.frame(fold = integer(0), rmse = numeric(0),
+                              mae  = numeric(0), r2   = numeric(0))
+
+  for (k in seq_len(n_folds)) {
+    train <- df[df$fold != k, ]
+    test  <- df[df$fold == k, ]
+
+    b_hat_cv       <- setNames(rep(0, length(levels(train$.cluster))),
+                               levels(train$.cluster))
+    rf_cv          <- NULL
+    re_var_prev_cv <- NA
+
+    for (iter in seq_len(15)) {
+      b_vec              <- b_hat_cv[as.character(train$.cluster)]
+      b_vec[is.na(b_vec)] <- 0
+      rf_df_cv           <- train[, predictors, drop = FALSE]
+      rf_df_cv[[".y_star"]] <- train$.y - b_vec
+
+      rf_cv <- ranger(
+        formula      = rf_formula,
+        data         = rf_df_cv,
+        num.trees    = 300,
+        importance   = "none",
+        case.weights = train$.weight,
+        seed         = seed,
+        num.threads  = parallel::detectCores() - 1
+      )
+
+      f_hat_cv <- predict(rf_cv, data = rf_df_cv)$predictions
+      e_hat_cv <- train$.y - f_hat_cv
+
+      lmm_cv <- tryCatch(
+        suppressWarnings(
+          lmer(.e ~ 1 + (1 | .cluster),
+               data    = data.frame(.e       = e_hat_cv,
+                                    .cluster = train$.cluster,
+                                    .w       = train$.weight),
+               weights = .w,
+               REML    = FALSE,
+               control = lmerControl(optimizer = "bobyqa",
+                                     optCtrl   = list(maxfun = 1e5)))
+        ),
+        error = function(e) NULL
+      )
+      if (is.null(lmm_cv)) break
+
+      re_vals <- ranef(lmm_cv)[[".cluster"]]
+      b_hat_cv[] <- 0
+      matched    <- intersect(rownames(re_vals), names(b_hat_cv))
+      b_hat_cv[matched] <- re_vals[matched, "(Intercept)"]
+
+      re_var_now <- as.data.frame(VarCorr(lmm_cv))$vcov[1]
+      if (iter > 1 && abs(re_var_now - re_var_prev_cv) < 1e-6) break
+      re_var_prev_cv <- re_var_now
+    }
+
+    test_pred <- pmax(0, pmin(1,
+      predict(rf_cv, data = test[, predictors, drop = FALSE])$predictions +
+      replace(b_hat_cv[as.character(test$.cluster)],
+              is.na(b_hat_cv[as.character(test$.cluster)]), 0)
+    ))
+
+    actual <- test$.y
+    ss_res <- sum((actual - test_pred)^2,         na.rm = TRUE)
+    ss_tot <- sum((actual - mean(actual))^2,       na.rm = TRUE)
+    rmse_k <- sqrt(mean((actual - test_pred)^2,   na.rm = TRUE))
+    mae_k  <- mean(abs(actual - test_pred),        na.rm = TRUE)
+    r2_k   <- 1 - ss_res / ss_tot
+
+    cat("  Fold", k, "| n =", nrow(test),
+        "| RMSE:", round(rmse_k, 5),
+        "| MAE:",  round(mae_k,  5),
+        "| R2:",   round(r2_k,   4), "\n")
+
+    fold_metrics <- rbind(fold_metrics,
+                          data.frame(fold = k, rmse = rmse_k,
+                                     mae  = mae_k, r2 = r2_k))
+  }
+
+  cat("  Mean RMSE:", round(mean(fold_metrics$rmse), 5),
+      "(SD:", round(sd(fold_metrics$rmse), 5), ")\n")
+  cat("  Mean MAE :", round(mean(fold_metrics$mae),  5),
+      "(SD:", round(sd(fold_metrics$mae),  5), ")\n")
+  cat("  Mean R2  :", round(mean(fold_metrics$r2),   4),
+      "(SD:", round(sd(fold_metrics$r2),   4), ")\n")
+
+  list(fold_metrics = fold_metrics,
+       mean_rmse    = mean(fold_metrics$rmse),
+       mean_mae     = mean(fold_metrics$mae),
+       mean_r2      = mean(fold_metrics$r2))
+}
+```
+```{r gmerf-cv-run}
+cat("\n", rep("=", 55), "\n", sep = "")
+cat("GMERF CROSS-VALIDATION\n")
+cat(rep("=", 55), "\n\n", sep = "")
+
+cv_results <- list(
+  Politicians = evaluate_gmerf_cv(df_train$Politicians, "Politicians"),
+  Newspeople  = evaluate_gmerf_cv(df_train$Newspeople,  "Newspeople"),
+  Activists   = evaluate_gmerf_cv(df_train$Activists,   "Activists")
+)
+
+save(cv_results, file = paste0(rdataPath, "gmerf_cv_results.RData"))
+cat("\nGMERF CV results saved.\n")
+```
+
+# Model Comparison
+```{r model-comparison}
+if (!exists("bb_cv_results"))
+  load(paste0(rdataPath, "bb_cv_results.RData"))
+if (!exists("gamm_cv_results"))
+  load(paste0(rdataPath, "gamm_cv_results.RData"))
+if (!exists("cv_results"))
+  load(paste0(rdataPath, "gmerf_cv_results.RData"))
+
+cat("\n", rep("=", 50), "\n", sep = "")
+cat("COMPLETE MODEL COMPARISON WITH CV\n")
+cat(rep("=", 50), "\n", sep = "")
+
+comparison_df_full <- data.frame(
+  Dataset    = character(), Model      = character(),
+  AIC        = numeric(),   LogLik     = numeric(),
+  Train_RMSE = numeric(),   CV_RMSE    = numeric(),
+  Train_R2   = numeric(),   CV_R2      = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (nm in names(bb_models)) {
+  m <- bb_models[[nm]]
+  if (is.null(m)) next
+  pred   <- predict(m, type = "response")
+  actual <- with(df_train[[nm]], HReplies / Replies)
+  comparison_df_full <- rbind(comparison_df_full, data.frame(
+    Dataset    = nm, Model      = "BB",
+    AIC        = tryCatch(AIC(m), error = function(e) NA),
+    LogLik     = tryCatch(as.numeric(logLik(m)), error = function(e) NA),
+    Train_RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    CV_RMSE    = bb_cv_results[[nm]]$mean_rmse,
+    Train_R2   = cor(actual, pred, use = "complete.obs")^2,
+    CV_R2      = bb_cv_results[[nm]]$mean_r2,
+    stringsAsFactors = FALSE
+  ))
+}
+
+for (nm in names(gamm_models)) {
+  m <- gamm_models[[nm]]
+  if (is.null(m)) next
+  pred   <- predict(m, type = "response")
+  actual <- with(df_train[[nm]], HReplies / Replies)
+  comparison_df_full <- rbind(comparison_df_full, data.frame(
+    Dataset    = nm, Model      = "GAMM",
+    AIC        = AIC(m),
+    LogLik     = as.numeric(logLik(m)),
+    Train_RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    CV_RMSE    = gamm_cv_results[[nm]]$mean_rmse,
+    Train_R2   = cor(actual, pred, use = "complete.obs")^2,
+    CV_R2      = gamm_cv_results[[nm]]$mean_r2,
+    stringsAsFactors = FALSE
+  ))
+}
+
+for (nm in names(gmerf_models)) {
+  m <- gmerf_models[[nm]]
+  if (is.null(m)) next
+  comparison_df_full <- rbind(comparison_df_full, data.frame(
+    Dataset    = nm, Model      = "GMERF",
+    AIC        = NA,
+    LogLik     = as.numeric(logLik(m$lmm_model)),
+    Train_RMSE = m$rmse_final,
+    CV_RMSE    = cv_results[[nm]]$mean_rmse,
+    Train_R2   = NA,
+    CV_R2      = cv_results[[nm]]$mean_r2,
+    stringsAsFactors = FALSE
+  ))
+}
+
+comparison_df_full <- comparison_df_full[
+  order(comparison_df_full$Dataset, comparison_df_full$Model), ]
+comparison_df_full$Best_CV_RMSE <- ""
+comparison_df_full$Best_CV_R2   <- ""
+
+for (ds in unique(comparison_df_full$Dataset)) {
+  idx <- comparison_df_full$Dataset == ds
+  cv_vals <- comparison_df_full$CV_RMSE[idx]
+  r2_vals <- comparison_df_full$CV_R2[idx]
+  if (any(!is.na(cv_vals)))
+    comparison_df_full$Best_CV_RMSE[idx][which.min(cv_vals)] <- "***"
+  if (any(!is.na(r2_vals)))
+    comparison_df_full$Best_CV_R2[idx][which.max(r2_vals)]   <- "***"
+}
+
+cat("\nNote: AIC not comparable across model families (BB vs GAMM).\n")
+cat("Primary comparison metric is CV_RMSE (out-of-sample).\n\n")
+print(comparison_df_full[, c("Dataset", "Model", "AIC", "Train_RMSE",
+                              "CV_RMSE", "Train_R2", "CV_R2",
+                              "Best_CV_RMSE", "Best_CV_R2")],
+      row.names = FALSE, digits = 5)
+
+cat("\n", rep("=", 50), "\n", sep = "")
+```
+
+# Test Set Evaluation
+```{r test-set}
+if (!exists("bb_models"))    load(paste0(rdataPath, "bb_models.RData"))
+if (!exists("gamm_models"))  load(paste0(rdataPath, "gamm_models.RData"))
+if (!exists("gmerf_models")) load(paste0(rdataPath, "gmerf_models.RData"))
+
+cat("\n", rep("=", 50), "\n", sep = "")
+cat("TEST SET EVALUATION\n")
+cat(rep("=", 50), "\n", sep = "")
+
+cat("Test set sizes:\n")
+walk2(df_test, names(df_test), ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
+
+test_results <- data.frame(
+  Dataset = character(), Model = character(),
+  RMSE    = numeric(),   MAE   = numeric(),
+  R2      = numeric(),   n     = integer(),
+  stringsAsFactors = FALSE
+)
+
+predictors <- c("MediaAttached", "TextComplexity", "MoralWords",
+                "MoralEmotionalWords", "EmotionalWords", "WordCount", "Quote")
+
+for (nm in names(df_test)) {
+
+  cat("\n", rep("-", 45), "\n", sep = "")
+  cat("Dataset:", nm, "\n")
+
+  # Keep original variable types to match what BB and GAMM were trained on
+  test_df <- df_test[[nm]] %>%
+    mutate(
+      UserID = factor(UserID),
+      .prop  = HReplies / Replies
+    ) %>%
+    filter(!is.na(.prop), Replies > 0)
+
+  actual <- test_df$.prop
+  n_test <- nrow(test_df)
+
+  eval_preds <- function(pred, model_name, dataset_name) {
+    pred   <- pmax(0, pmin(1, pred))
+    ss_res <- sum((actual - pred)^2,         na.rm = TRUE)
+    ss_tot <- sum((actual - mean(actual))^2, na.rm = TRUE)
+    rmse   <- sqrt(mean((actual - pred)^2,   na.rm = TRUE))
+    mae    <- mean(abs(actual - pred),        na.rm = TRUE)
+    r2     <- 1 - ss_res / ss_tot
+
+    cat(" ", model_name,
+        "| RMSE:", round(rmse, 5),
+        "| MAE:",  round(mae,  5),
+        "| R2:",   round(r2,   4), "\n")
+
+    data.frame(Dataset = dataset_name, Model = model_name,
+               RMSE = rmse, MAE = mae, R2 = r2, n = n_test,
+               stringsAsFactors = FALSE)
+  }
+
+  # ── BB ───────────────────────────────────────────────────────────────────────
+  if (!is.null(bb_models[[nm]])) {
+    pred <- tryCatch(
+      predict(bb_models[[nm]], newdata = test_df, type = "response",
+              allow.new.levels = TRUE),
+      error = function(e) { cat("  BB predict error:", e$message, "\n"); NULL }
+    )
+    if (!is.null(pred))
+      test_results <- rbind(test_results, eval_preds(pred, "BB", nm))
+  }
+
+  # ── GAMM ─────────────────────────────────────────────────────────────────────
+  if (!is.null(gamm_models[[nm]])) {
+    pred <- tryCatch(
+      predict(gamm_models[[nm]], newdata = test_df, type = "response",
+              exclude = "s(UserID)"),
+      error = function(e) { cat("  GAMM predict error:", e$message, "\n"); NULL }
+    )
+    if (!is.null(pred))
+      test_results <- rbind(test_results, eval_preds(pred, "GAMM", nm))
+  }
+
+  # ── GMERF ────────────────────────────────────────────────────────────────────
+  if (!is.null(gmerf_models[[nm]])) {
+    m <- gmerf_models[[nm]]
+
+    # GMERF needs numeric predictors - coerce here only for GMERF
+    test_pred_df <- test_df %>%
+      mutate(MediaAttached = as.numeric(MediaAttached),
+             Quote         = as.numeric(Quote))
+    test_pred_df <- test_pred_df[, predictors, drop = FALSE]
+
+    rf_pred <- tryCatch(
+      predict(m$rf_model, data = test_pred_df)$predictions,
+      error = function(e) { cat("  GMERF predict error:", e$message, "\n"); NULL }
+    )
+
+    if (!is.null(rf_pred)) {
+      test_re      <- m$b_hat[as.character(test_df$UserID)]
+      test_re[is.na(test_re)] <- 0
+      pred         <- rf_pred + test_re
+      test_results <- rbind(test_results, eval_preds(pred, "GMERF", nm))
+    }
+  }
+}
+
+test_results <- test_results[order(test_results$Dataset, test_results$Model), ]
+test_results$Best_RMSE <- ""
+test_results$Best_R2   <- ""
+
+for (ds in unique(test_results$Dataset)) {
+  idx <- test_results$Dataset == ds
+  test_results$Best_RMSE[idx][which.min(test_results$RMSE[idx])] <- "***"
+  test_results$Best_R2[idx][which.max(test_results$R2[idx])]     <- "***"
+}
+
+cat("\n", rep("=", 50), "\n", sep = "")
+cat("FINAL TEST SET RESULTS\n")
+cat(rep("=", 50), "\n\n", sep = "")
+print(test_results[, c("Dataset", "Model", "n", "RMSE", "MAE",
+                        "R2", "Best_RMSE", "Best_R2")],
+      row.names = FALSE, digits = 5)
+
+cat("\n", rep("-", 45), "\n", sep = "")
+cat("Test RMSE vs CV RMSE (overfitting check):\n\n")
+
+for (nm in unique(test_results$Dataset)) {
+  cat(nm, ":\n")
+  for (mod in c("BB", "GAMM", "GMERF")) {
+    test_rmse <- test_results$RMSE[
+      test_results$Dataset == nm & test_results$Model == mod
+    ]
+    cv_rmse <- switch(mod,
+      BB    = if (exists("bb_cv_results"))
+                bb_cv_results[[nm]]$mean_rmse   else NA,
+      GAMM  = if (exists("gamm_cv_results"))
+                gamm_cv_results[[nm]]$mean_rmse else NA,
+      GMERF = if (exists("cv_results") && nm %in% names(cv_results))
+                cv_results[[nm]]$mean_rmse      else NA
+    )
+    if (length(test_rmse) > 0 && !is.na(cv_rmse)) {
+      cat("  ", mod,
+          "| Test RMSE:", round(test_rmse, 5),
+          "| CV RMSE:",   round(cv_rmse,   5),
+          "| Diff:",      round(test_rmse - cv_rmse, 5), "\n")
+    }
+  }
+}
+
+save(test_results, file = paste0(rdataPath, "test_results.RData"))
+cat("\nTest results saved.\n")
+cat(rep("=", 50), "\n", sep = "")
+```
+
+# Beta-Binomial 99% Confidence Intervals
+```{r}
+bb_99ci <- imap(bb_models, function(m, nm) {
+  tryCatch(
+    confint(m, level = 0.99, method = "Wald"),
+    error = function(e) { cat("CI error:", nm, e$message, "\n"); NULL }
+  )
+})
+save(bb_99ci, file = paste0(rdataPath, "bb_99ci.RData"))
+
+cat("BB MODEL: COEFFICIENTS AND 99% CONFIDENCE INTERVALS\n\n")
+
+var_labels <- c(
+  "(Intercept)"         = "Intercept",
+  "MediaAttachedTRUE"   = "Media Attached",
+  "TextComplexity"      = "Text Complexity",
+  "MoralWords"          = "Moral Words",
+  "MoralEmotionalWords" = "Moral-Emotional Words",
+  "EmotionalWords"      = "Emotional Words",
+  "WordCount"           = "Word Count",
+  "QuoteTRUE"           = "Quote"
+)
+
+for (nm in names(bb_99ci)) {
+  ci  <- bb_99ci[[nm]]
+  cat("--", nm, "--\n")
+  cat(sprintf("%-25s %8s %8s %8s %10s %10s\n",
+              "Variable", "Coef", "OR", "OR%", "99% CI low", "99% CI high"))
+  cat(rep("-", 73), "\n")
+  
+  for (v in names(var_labels)) {
+    if (v %in% rownames(ci)) {
+      coef_val <- ci[v, "Estimate"]
+      lo       <- ci[v, 1]
+      hi       <- ci[v, 2]
+      or_val   <- exp(coef_val)
+      or_pct   <- (or_val - 1) * 100
+      or_lo    <- exp(lo)
+      or_hi    <- exp(hi)
+      cat(sprintf("%-25s %8.4f %8.4f %7.2f%% %10.4f %10.4f\n",
+                  var_labels[v], coef_val, or_val, or_pct, or_lo, or_hi))
+    }
+  }
+  cat("\n")
+}
+
+```
+
+# GAMM Parametric Coefficient Table
+```{r}
+gamm_parametric <- imap(gamm_models, function(m, nm) {
+  summary(m)$p.table
+})
+save(gamm_parametric, file = paste0(rdataPath, "gamm_parametric.RData"))
+
+cat("GAMM MODEL: PARAMETRIC COEFFICIENTS\n\n")
+
+for (nm in names(gamm_parametric)) {
+  pt <- gamm_parametric[[nm]]
+  cat("--", nm, "--\n")
+  cat(sprintf("%-20s %10s %10s %10s %12s\n",
+              "Variable", "Estimate", "Std.Error", "z value", "p value"))
+  cat(rep("-", 65), "\n")
+  
+  for (v in rownames(pt)) {
+    label <- ifelse(v %in% names(var_labels), var_labels[v], v)
+    pval  <- pt[v, 4]
+    pval_fmt <- ifelse(pval < 0.001, "<0.001", round(pval, 4))
+    cat(sprintf("%-20s %10.4f %10.4f %10.4f %12s\n",
+                label,
+                pt[v, 1],
+                pt[v, 2],
+                pt[v, 3],
+                pval_fmt))
+  }
+  cat("\n")
+}
+```
+
+# Generate Visualizations
+
+## Coefficient Comparison Plot
+```{r}
+# Build coefficient dataframe from BB models
+coef_plot_data <- imap_dfr(bb_models, function(m, nm) {
+  ci  <- bb_99ci[[nm]]
+  vars_to_plot <- c("MoralWords", "MoralEmotionalWords",
+                    "EmotionalWords", "WordCount", "TextComplexity")
+  var_labels <- c(
+    "MoralWords"          = "Moral Words",
+    "MoralEmotionalWords" = "Moral-Emotional Words",
+    "EmotionalWords"      = "Emotional Words",
+    "WordCount"           = "Word Count",
+    "TextComplexity"      = "Text Complexity"
+  )
+  
+  data.frame(
+    dataset  = nm,
+    variable = var_labels[vars_to_plot],
+    estimate = ci[vars_to_plot, "Estimate"],
+    ci_low   = ci[vars_to_plot, 1],
+    ci_high  = ci[vars_to_plot, 2],
+    stringsAsFactors = FALSE
+  )
+}) %>%
+  mutate(
+    dataset  = factor(dataset,  levels = c("Politicians", "Newspeople", "Activists")),
+    variable = factor(variable, levels = rev(c("Moral Words", "Moral-Emotional Words",
+                                               "Emotional Words", "Word Count",
+                                               "Text Complexity")))
+  )
+
+colors <- wes_palette("Darjeeling1")[c(1, 2, 3)]
+
+p_coef <- ggplot(coef_plot_data,
+                 aes(x = variable, y = estimate,
+                     ymin = ci_low, ymax = ci_high,
+                     color = dataset, group = dataset)) +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_pointrange(position = position_dodge(width = 0.5),
+                  linewidth = 0.6, size = 0.8) +
+  coord_flip() +
+  scale_color_manual(values = colors) +
+  scale_y_continuous(breaks = seq(-0.02, 0.20, by = 0.02)) +
+  labs(
+    title   = "Effect of Moralized Language on Hate Speech (Betabinomial Model)",
+    subtitle = "Coefficient estimates with 99% confidence intervals",
+    x       = NULL,
+    y       = "Coefficient Estimate",
+    color   = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position   = c(0.82, 0.2),
+    legend.background = element_rect(fill = "white", color = "grey80"),
+    axis.text.y       = element_text(size = 11),
+    axis.text.x       = element_text(size = 10),
+    plot.title        = element_text(size = 13, face = "bold"),
+    plot.subtitle     = element_text(size = 10, color = "grey40")
+  )
+
+print(p_coef)
+ggsave(paste0(graphPath, "BB_coefficient_plot.pdf"),
+       p_coef, width = 18, height = 10, units = "cm", scale = 1.2)
+```
+
+## Model Comparison CV RMSE Bar Chart
+```{r}
+cv_compare_data <- bind_rows(
+  imap_dfr(bb_cv_results, function(x, nm) {
+    data.frame(Dataset = nm, Model = "BB",
+               CV_RMSE = x$mean_rmse,
+               SD      = sd(x$fold_metrics$rmse),
+               stringsAsFactors = FALSE)
+  }),
+  imap_dfr(gamm_cv_results, function(x, nm) {
+    data.frame(Dataset = nm, Model = "GAMM",
+               CV_RMSE = x$mean_rmse,
+               SD      = sd(x$fold_metrics$rmse),
+               stringsAsFactors = FALSE)
+  }),
+  imap_dfr(gmerf_cv_results, function(x, nm) {
+    data.frame(Dataset = nm, Model = "GMERF",
+               CV_RMSE = x$mean_rmse,
+               SD      = sd(x$fold_metrics$rmse),
+               stringsAsFactors = FALSE)
+  })
+) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Model   = factor(Model,   levels = c("BB", "GAMM", "GMERF"))
+  )
+
+p_cv <- ggplot(cv_compare_data,
+               aes(x = Dataset, y = CV_RMSE, fill = Model)) +
+  geom_col(position = position_dodge(width = 0.7),
+           width = 0.6, color = "white") +
+  geom_errorbar(aes(ymin = CV_RMSE - SD, ymax = CV_RMSE + SD),
+                position = position_dodge(width = 0.7),
+                width = 0.2, color = "grey30") +
+  scale_fill_manual(values = wes_palette("Darjeeling1")[c(1, 2, 3)]) +
+  scale_y_continuous(limits = c(0, 0.12),
+                     breaks = seq(0, 0.12, by = 0.02)) +
+  labs(
+    title    = "Cross-Validation RMSE by Model and Dataset",
+    subtitle = "Error bars show standard deviation across 5 folds",
+    x        = NULL,
+    y        = "Mean CV RMSE",
+    fill     = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text       = element_text(size = 11),
+    plot.title      = element_text(size = 13, face = "bold"),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  )
+
+print(p_cv)
+ggsave(paste0(graphPath, "CV_RMSE_comparison.pdf"),
+       p_cv, width = 18, height = 10, units = "cm", scale = 1.2)
+```
+
+## GAMM Smooth Plots for MoralWords
+
+```{r}
+library(mgcv)
+
+smooth_data <- imap_dfr(gamm_models, function(m, nm) {
+  
+  # Generate prediction grid for MoralWords
+  moral_range <- range(m$model[["MoralWords"]], na.rm = TRUE)
+  newdata <- data.frame(
+    MoralWords          = seq(moral_range[1], moral_range[2], length.out = 200),
+    MoralEmotionalWords = 0,
+    EmotionalWords      = 0,
+    WordCount           = median(m$model[["WordCount"]], na.rm = TRUE),
+    TextComplexity      = median(m$model[["TextComplexity"]], na.rm = TRUE),
+    MediaAttached       = FALSE,
+    Quote               = FALSE,
+    UserID              = m$model[["UserID"]][1]
+  )
+  
+  pred <- predict(m, newdata = newdata, type = "link",
+                  se.fit = TRUE, exclude = "s(UserID)")
+  
+  data.frame(
+    Dataset      = nm,
+    MoralWords   = newdata$MoralWords,
+    fit          = pred$fit,
+    se           = pred$se.fit,
+    fit_lo       = pred$fit - 2 * pred$se.fit,
+    fit_hi       = pred$fit + 2 * pred$se.fit,
+    stringsAsFactors = FALSE
+  )
+}) %>%
+  mutate(Dataset = factor(Dataset,
+                          levels = c("Politicians", "Newspeople", "Activists")))
+
+p_smooth <- ggplot(smooth_data,
+                   aes(x = MoralWords, y = fit)) +
+  geom_ribbon(aes(ymin = fit_lo, ymax = fit_hi),
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  facet_wrap(~ Dataset, scales = "free_x") +
+  labs(
+    title    = "Non-Linear Effect of Moral Words on Hate Speech (GAMM)",
+    subtitle = "Predicted log-odds with 95% confidence band; other predictors held at median",
+    x        = "Moral Word Count",
+    y        = "Predicted Log-Odds of Hate Speech"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text    = element_text(size = 11, face = "bold"),
+    axis.text     = element_text(size = 9),
+    plot.title    = element_text(size = 13, face = "bold"),
+    plot.subtitle = element_text(size = 10, color = "grey40")
+  )
+
+print(p_smooth)
+ggsave(paste0(graphPath, "GAMM_MoralWords_smooth.pdf"),
+       p_smooth, width = 22, height = 9, units = "cm", scale = 1.2)
+
+```
+
+## GMERF Variable Importance Chart
+
+```{r}
+importance_data <- imap_dfr(gmerf_models, function(m, nm) {
+  m$importance %>%
+    mutate(Dataset = nm)
+}) %>%
+  mutate(
+    Dataset  = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    variable = case_match(variable,
+      "TextComplexity"      ~ "Text Complexity",
+      "WordCount"           ~ "Word Count",
+      "MoralWords"          ~ "Moral Words",
+      "MoralEmotionalWords" ~ "Moral-Emotional Words",
+      "EmotionalWords"      ~ "Emotional Words",
+      "MediaAttached"       ~ "Media Attached",
+      "Quote"               ~ "Quote",
+      .default = variable
+    ),
+    variable = reorder(variable, pct)
+  )
+
+p_imp <- ggplot(importance_data,
+                aes(x = variable, y = pct, fill = Dataset)) +
+  geom_col(position = position_dodge(width = 0.7),
+           width = 0.6, color = "white") +
+  coord_flip() +
+  scale_fill_manual(values = wes_palette("Darjeeling1")[c(1, 2, 3)]) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  labs(
+    title    = "GMERF Variable Importance by Dataset",
+    subtitle = "Percentage of total impurity reduction attributed to each predictor",
+    x        = NULL,
+    y        = "Importance (%)",
+    fill     = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text       = element_text(size = 11),
+    plot.title      = element_text(size = 13, face = "bold"),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  )
+
+print(p_imp)
+ggsave(paste0(graphPath, "GMERF_variable_importance.pdf"),
+       p_imp, width = 18, height = 10, units = "cm", scale = 1.2)
+```
+
+## Robustness Check Coefficient Stability Plot
+
+```{r}
+robustness_sources <- list()
+
+robustness_sources$main <- imap_dfr(bb_models, function(m, nm) {
+  data.frame(Dataset = nm, Check = "Main model (BB)",
+             Estimate = fixef(m)$cond["MoralWords"],
+             stringsAsFactors = FALSE)
+})
+
+robustness_sources$source_hate <- imap_dfr(source_hate_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  data.frame(Dataset = nm, Check = "Source hate control",
+             Estimate = fixef(m)["MoralWords"],
+             stringsAsFactors = FALSE)
+})
+
+robustness_sources$binary <- imap_dfr(binary_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  coefs <- fixef(m)
+  val   <- if ("MoralBinaryTRUE" %in% names(coefs)) coefs["MoralBinaryTRUE"] else NA
+  data.frame(Dataset = nm, Check = "Binary indicator",
+             Estimate = val, stringsAsFactors = FALSE)
+})
+
+robustness_sources$proportions <- imap_dfr(proportions_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  coefs <- fixef(m)
+  val   <- if ("MoralWordsProp" %in% names(coefs)) coefs["MoralWordsProp"] else NA
+  data.frame(Dataset = nm, Check = "Word proportions",
+             Estimate = val, stringsAsFactors = FALSE)
+})
+
+if (exists("directed_results")) {
+  robustness_sources$directed <- imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$directed)) return(NULL)
+    data.frame(Dataset = nm, Check = "Directed hate",
+               Estimate = fixef(x$directed)["MoralWords"],
+               stringsAsFactors = FALSE)
+  })
+  robustness_sources$generalised <- imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$generalised)) return(NULL)
+    data.frame(Dataset = nm, Check = "Generalised hate",
+               Estimate = fixef(x$generalised)["MoralWords"],
+               stringsAsFactors = FALSE)
+  })
+} else {
+  cat("Note: directed_results not found - skipping directed/generalised hate checks.\n")
+}
+
+robustness_sources$interactions <- imap_dfr(interaction_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  data.frame(Dataset = nm, Check = "With interactions",
+             Estimate = fixef(m)["MoralWords"],
+             stringsAsFactors = FALSE)
+})
+
+robustness_data <- bind_rows(robustness_sources) %>%
+  filter(!is.na(Estimate)) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Check   = factor(Check,   levels = unique(Check))
+  )
+
+
+robustness_data <- bind_rows(
+  # Main model coefficients from BB
+  imap_dfr(bb_models, function(m, nm) {
+    data.frame(
+      Dataset = nm, Check = "Main model (BB)",
+      Estimate = fixef(m)$cond["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Source hate control
+  imap_dfr(source_hate_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "Source hate control",
+      Estimate = fixef(m)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Binary indicator
+  imap_dfr(binary_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    coefs <- fixef(m)
+    val   <- if ("MoralBinaryTRUE" %in% names(coefs)) coefs["MoralBinaryTRUE"] else NA
+    data.frame(
+      Dataset = nm, Check = "Binary indicator",
+      Estimate = val,
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Proportions
+  imap_dfr(proportions_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    coefs <- fixef(m)
+    val   <- if ("MoralWordsProp" %in% names(coefs)) coefs["MoralWordsProp"] else NA
+    data.frame(
+      Dataset = nm, Check = "Word proportions",
+      Estimate = val,
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Directed hate
+  imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$directed)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "Directed hate",
+      Estimate = fixef(x$directed)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Generalised hate
+  imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$generalised)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "Generalised hate",
+      Estimate = fixef(x$generalised)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Interactions
+  imap_dfr(interaction_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "With interactions",
+      Estimate = fixef(m)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  })
+) %>%
+  filter(!is.na(Estimate)) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Check   = factor(Check,   levels = c("Main model (BB)", "Source hate control",
+                                          "Binary indicator", "Word proportions",
+                                          "Directed hate", "Generalised hate",
+                                          "With interactions"))
+  )
+
+p_robust <- ggplot(robustness_data,
+                   aes(x = Check, y = Estimate, color = Dataset, group = Dataset)) +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_line(size = 0.8, alpha = 0.6) +
+  geom_point(size = 3) +
+  coord_flip() +
+  scale_color_manual(values = wes_palette("Darjeeling1")[c(1, 2, 3)]) +
+  labs(
+    title    = "MoralWords Coefficient Across Robustness Specifications",
+    subtitle = "Positive values across all checks confirm robustness of the main finding",
+    x        = NULL,
+    y        = "MoralWords Coefficient Estimate",
+    color    = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text       = element_text(size = 10),
+    plot.title      = element_text(size = 13, face = "bold"),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  )
+
+print(p_robust)
+ggsave(paste0(graphPath, "Robustness_MoralWords.pdf"),
+       p_robust, width = 20, height = 10, units = "cm", scale = 1.2)
+```
+
+## Out-of-Sample R-Squared Improvement Table
+
+```{r}
+r2_improve_data <- bind_rows(
+  imap_dfr(oos_r2_results, function(df, nm) {
+    ratio <- df$Moral_vs_Content_ratio[
+      df$Specification == "Author + Content + Moral"
+    ]
+    data.frame(Dataset = nm, Source = "Our replication",
+               Ratio = ratio, stringsAsFactors = FALSE)
+  }),
+  data.frame(
+    Dataset = c("Politicians", "Newspeople", "Activists"),
+    Source  = "Parent paper",
+    Ratio   = c(1.22, 1.55, 1.42),
+    stringsAsFactors = FALSE
+  )
+) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Source  = factor(Source,  levels = c("Parent paper", "Our replication"))
+  )
+
+p_r2 <- ggplot(r2_improve_data,
+               aes(x = Dataset, y = Ratio, fill = Source)) +
+  geom_col(position = position_dodge(width = 0.6),
+           width = 0.5, color = "white") +
+  geom_hline(yintercept = 1, color = "grey40", linetype = "dashed") +
+  scale_fill_manual(values = c("Parent paper"    = "grey60",
+                               "Our replication" = "steelblue")) +
+  scale_y_continuous(breaks = seq(0, 2.5, by = 0.5),
+                     limits = c(0, 2.7)) +
+  labs(
+    title    = "Out-of-Sample R² Improvement from Adding Moral Language",
+    subtitle = "Ratio of moral language model R² to content-only model R²\nDashed line at 1.0 = no improvement",
+    x        = NULL,
+    y        = "R² Improvement Ratio",
+    fill     = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text       = element_text(size = 11),
+    plot.title      = element_text(size = 13, face = "bold"),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  )
+
+print(p_r2)
+ggsave(paste0(graphPath, "OOS_R2_improvement.pdf"),
+       p_r2, width = 16, height = 10, units = "cm", scale = 1.2)
+```
+
+```{r}
+for (nm in unique(test_results$Dataset)) {
+  cat(nm, ":\n")
+  for (mod in c("BB", "GAMM", "GMERF")) {
+    test_rmse <- test_results$RMSE[
+      test_results$Dataset == nm & test_results$Model == mod
+    ]
+    cv_rmse <- switch(mod,
+      BB    = if (exists("bb_cv_results"))
+                bb_cv_results[[nm]]$mean_rmse   else NA,
+      GAMM  = if (exists("gamm_cv_results"))
+                gamm_cv_results[[nm]]$mean_rmse else NA,
+      GMERF = if (exists("cv_results") && nm %in% names(cv_results))
+                cv_results[[nm]]$mean_rmse      else NA
+    )
+    if (length(test_rmse) > 0 && !is.na(cv_rmse)) {
+      cat("  ", mod,
+          "| Test RMSE:", round(test_rmse, 5),
+          "| CV RMSE:",   round(cv_rmse,   5),
+          "| Diff:",      round(test_rmse - cv_rmse, 5), "\n")
+    }
+  }
+}
+```
+

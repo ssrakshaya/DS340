@@ -1,0 +1,467 @@
+---
+title: "Moralized Language Predicts Hate Speech (Supplements)"
+author: KS
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+header-includes:
+   - \usepackage{dcolumn}
+   - \usepackage{booktabs}
+   - \usepackage{float}
+   - \usepackage{longtable}
+   - \usepackage{multirow}
+   - \usepackage{siunitx}
+output:
+  pdf_document:
+    toc: yes
+    keep_tex: no
+    number_sections: yes
+
+---
+
+```{r library, include=FALSE}
+library(tidyverse)
+library(lme4)
+library(glmmTMB)
+library(texreg)
+library(xtable)
+library(broom)
+library(lubridate)
+library(wesanderson)
+library(broom)
+library(broom.mixed)
+library(brms)
+library(car)
+library(tidymodels)
+library(furrr)
+
+options(xtable.comment = FALSE)
+options(width = 80)
+
+plan(multisession, workers = parallel::detectCores() / 2)
+
+source("utils.R")
+options(scipen = 999)
+```
+
+```{r Set paths, include = FALSE}
+inputPath <- "../Data/"
+graphPath <- "../Data/Graphs/"
+```
+
+# Functions
+```{r scale and add factors}
+factorize_df <- function(df) {
+  df <- df %>%
+    mutate(
+      UserID = factor(UserID),
+      SourceHate = factor(SourceHate)
+    ) %>%
+    mutate(SourceHate = relevel(SourceHate, "regular"))
+  
+  return(df)
+}
+```
+
+# Variable Definitions
+
+```{r replacement dict}
+vnames_list <- c(
+  "(Intercept)" = "Intercept",
+  "TextComplexity" = "Text Complexity",
+  "MoralWords" = "Moral Words",
+  "MoralWordsProp" = "Moral Words",
+  "MoralBinaryTRUE" = "Moral Words (binary)",
+  "MoralEmotionalWords" = "Moral-Emotional Words",
+  "MoralEmotionalWordsProp" = "Moral-Emotional Words",
+  "MoralEmotionalBinaryTRUE" = "Moral-Emotional Words (binary)",
+  "EmotionalWords" = "Emotional Words",
+  "EmotionalWordsProp" = "Emotional Words",
+  "WordCount" = "Word Count",
+  "EmotionalPositive" = "Positive Emotional Words",
+  "EmotionalNegative" = "Negative Emotional Words",
+  "QuoteTRUE" = "Quote (binary)",
+  "MediaAttachedTRUE" = "Media Attached (binary)",
+  "WordCount" = "Word Count",
+  "SourceHatehate" = "Hateful Source (binary)",
+  "MoralWords:WordCount" = "Moral Words x Word Count",
+  "MoralEmotionalWords:WordCount" = "Moral-Emotional Words x Word Count",
+  "XYZCount" = "XYZ Count"
+)
+```
+
+# Load Data
+
+```{r load preprocessed data}
+df_regression_politicians <- read_csv(paste0(inputPath, "df_politicians.csv")) %>% factorize_df()
+df_regression_newspeople <- read_csv(paste0(inputPath, "df_newspeople.csv")) %>% factorize_df()
+df_regression_activists <- read_csv(paste0(inputPath, "df_activists.csv")) %>% factorize_df()
+
+# List for use in regressions
+df_list <- list(df_regression_politicians, df_regression_newspeople, df_regression_activists)
+names(df_list) <- c("Politicians", "Newspeople", "Activists")
+```
+
+# Regression Analysis 
+
+## Regression with Interactions
+
+```{r Regression Interactions}
+regressions_covariates <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + MoralWords * WordCount + MoralEmotionalWords * WordCount + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_covariates, digits = 3)
+map(regressions_covariates, get_cis)
+```
+
+## Generalized vs. directed hate speech
+
+```{r}
+# 2PP
+regressions_2pp <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HRepliesDirected, Replies - HRepliesDirected) ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+# 3PP
+regressions_3pp <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HRepliesGeneralized, Replies - HRepliesGeneralized) ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(c(regressions_2pp, regressions_3pp), digits = 3)
+map(c(regressions_2pp, regressions_3pp), get_cis)
+```
+
+## Regression controlling for hate speech in source tweets
+
+```{r regression source hate}
+regressions_source <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + Quote + SourceHate + EmotionalWords + MoralWords + MoralEmotionalWords + WordCount + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_source, digits = 3)
+map(regressions_source, get_cis)
+```
+
+## Beta regressions
+```{r zoiRegression beta}
+regressions_beta_full <- df_list %>% future_map(., function(x) {
+  model <- brm(bf(ProportionOfHate ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    phi ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    zoi ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    coi ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    family = zero_one_inflated_beta()
+  ),
+  data = x,
+  cores = 7,
+  seed = TRUE
+  )
+})
+
+texreg(c(
+  extract(regressions_beta_full$Politicians, include.random = F),
+  extract(regressions_beta_full$Newspeople, include.random = F),
+  extract(regressions_beta_full$Activists, include.random = F)
+), digits = 3)
+```
+
+## Regression with proportions instead of frequencies
+
+```{r regression proportions}
+add_proportions <- function(df) {
+  df <- df %>%
+    mutate(
+      MoralWordsProp = MoralWords / WordCount,
+      MoralEmotionalWordsProp = MoralEmotionalWords / WordCount,
+      EmotionalWordsProp = EmotionalWords / WordCount
+    )
+  return(df)
+}
+
+regressions_proportions <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + MoralWordsProp + MoralEmotionalWordsProp + EmotionalWordsProp + WordCount + Quote + (1 | UserID),
+    data = add_proportions(x),
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_proportions, digits = 3)
+map(regressions_proportions, get_cis)
+```
+
+## Regressions with binary variables for moral and moral-emotional words
+
+```{r regression moral_bin}
+add_binary <- function(df) {
+  df <- df %>% mutate(
+    MoralBinary = ifelse(MoralWords > 0, TRUE, FALSE),
+    MoralEmotionalBinary = ifelse(MoralEmotionalWords > 0, TRUE, FALSE)
+  )
+}
+
+regressions_moralbin <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + MoralBinary + MoralEmotionalBinary + EmotionalWords + WordCount + Quote + (1 | UserID),
+    data = add_binary(x),
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_moralbin, digits = 3)
+map(regressions_moralbin, get_cis)
+```
+
+## Regressions with distinctly positive and negative emotional words
+
+```{r regression_distinct}
+regressions_distinct <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalPositive + EmotionalNegative + WordCount + Quote + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_distinct, digits = 3)
+map(regressions_distinct, get_cis)
+```
+
+## Regressions with the number of retweets
+
+```{r regression_retweets}
+scale_df <- function(df) {
+  df <- df %>%
+    mutate(
+      TextComplexityZ = scale(TextComplexity),
+      MoralWordsZ = scale(MoralWords),
+      MoralEmotionalWordsZ = scale(MoralEmotionalWords),
+      EmotionalWordsZ = scale(EmotionalWords),
+      WordCountZ = scale(WordCount),
+      RetweetCountZ = scale(RetweetCount),
+      LikeCountZ = scale(LikeCount)
+    ) 
+}
+
+regressions_retweet <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexityZ + MoralWordsZ + MoralEmotionalWordsZ + EmotionalWordsZ + WordCountZ + Quote + RetweetCountZ + (1 | UserID),
+    data = scale_df(x),
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_retweet, digits = 3)
+map(regressions_retweet, get_cis)
+```
+
+## Regressions with the number of likes
+
+```{r regression_likes}
+regressions_likes <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexityZ + MoralWordsZ + MoralEmotionalWordsZ + EmotionalWordsZ + WordCountZ + Quote + LikeCountZ + (1 | UserID),
+    data = scale_df(x),
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(regressions_likes, digits = 3)
+map(regressions_likes, get_cis)
+```
+
+## Regressions with XYZ-Count
+
+```{r XYZ Regression}
+regressions_xyz <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + XYZCount + EmotionalWords + WordCount + Quote + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+regressions_main <- df_list %>% future_map(., function(x) {
+  model <- glmer(cbind(HReplies, Replies - HReplies) ~ MediaAttached + TextComplexity + MoralWords + MoralEmotionalWords + EmotionalWords + WordCount + Quote + (1 | UserID),
+    data = x,
+    family = binomial(link = "logit"),
+    nAGQ = 1,
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
+  )
+})
+
+texreg(c(regressions_xyz$Politicians, regressions_main$Politicians, regressions_xyz$Newspeople, regressions_main$Newspeople, regressions_xyz$Activists, regressions_main$Activists), digits = 3)
+
+# VIF
+map(regressions_main, vif)
+
+# CIs
+map(regressions_xyz, get_cis)
+```
+
+# Out-of-Sample Evaluation
+
+```{r predict tidymodels glm}
+evaluate_models_glm <- function(df, metric = yardstick::rsq) {
+  df <- df %>% mutate(Replies = frequency_weights(Replies))
+  folds <- vfold_cv(df, v = 10)
+
+  mod_glm <- linear_reg() %>%
+    set_engine("glm",
+      family = stats::binomial(link = "logit")
+    ) %>%
+    translate()
+
+  dep_var <- "ProportionOfHate"
+  author_vars <- c("Followers", "Followees", "AccountAge", "Verified")
+  content_vars <- c("WordCount", "TextComplexity", "EmotionalWords", "Quote", "MediaAttached")
+  xyz_vars <- c("XYZCount")
+  moral_vars <- c("MoralWords", "MoralEmotionalWords")
+  spec_list <- list(author_vars, c(author_vars, content_vars), c(author_vars, content_vars, xyz_vars), c(author_vars, content_vars, moral_vars))
+
+  workflow_list <- spec_list %>% future_map(., function(var) {
+    workflow() %>%
+      add_variables(outcomes = dep_var, predictors = all_of(var)) %>%
+      add_model(mod_glm, formula = make_formula(dep_var, c(var), c())) %>%
+      add_case_weights(Replies)
+  })
+  metrics <- workflow_list %>%
+    future_map(., function(x) {
+      fit_resamples(x, folds, metrics = metric_set(metric)) %>%
+        collect_metrics() %>%
+        pull(mean)
+    })
+
+  return(metrics)
+}
+
+r2_results <- map(df_list, evaluate_models_glm)
+
+tibble(
+  Model = c("Author", "Content", "XYZ", "Moral"),
+  Politicians = r2_results$Politicians %>% unlist(),
+  Newspeople = r2_results$News %>% unlist(),
+  Activists = r2_results$Activists %>% unlist()
+) %>% arrange(desc(Politicians))
+```
+
+# Out-of-Sample Evaluation (AUC)
+
+```{r predict tidymodels glm auc, warning = FALSE, message=FALSE}
+evaluate_models_glm_auc <- function(df, metric = yardstick::roc_auc) {
+  df <- df %>%
+    filter(Replies > 10) %>%
+    mutate(
+      ExtremelyHateful = if_else(
+        ProportionOfHate > quantile(ProportionOfHate, probs = 0.75), TRUE, FALSE
+      ),
+      Replies = frequency_weights(Replies),
+      ExtremelyHateful = factor(ExtremelyHateful),
+      ExtremelyHateful = relevel(ExtremelyHateful, "TRUE")
+    )
+
+  folds <- vfold_cv(df, v = 10)
+
+  mod_glm <- logistic_reg() %>%
+    set_engine("glm",
+      family = stats::binomial(link = "logit")
+    ) %>%
+    translate()
+
+  dep_var <- "ExtremelyHateful"
+  author_vars <- c("Followers", "Followees", "AccountAge", "Verified")
+  content_vars <- c("WordCount", "TextComplexity", "EmotionalWords", "Quote", "MediaAttached")
+  xyz_vars <- c("XYZCount")
+  moral_vars <- c("MoralWords", "MoralEmotionalWords")
+  spec_list <- list(
+    author_vars,
+    c(author_vars, content_vars),
+    c(author_vars, content_vars, xyz_vars),
+    c(author_vars, content_vars, moral_vars)
+  )
+
+  workflow_list <- spec_list %>% future_map(., function(var) {
+    workflow() %>%
+      add_variables(outcomes = dep_var, predictors = all_of(var)) %>%
+      add_model(mod_glm, formula = make_formula(dep_var, c(var), c()))
+  })
+  metrics <- workflow_list %>%
+    future_map(., function(x) {
+      fit_resamples(x,
+        folds,
+        metrics = metric_set(metric),
+        control = control_resamples(save_pred = TRUE)
+      )
+    })
+
+  return(metrics)
+}
+
+plot_roc <- function(df) {
+  df %>%
+    map2(., specifications_list, function(x, y) {
+      collect_predictions(x) %>%
+        roc_curve(ExtremelyHateful, .pred_TRUE) %>%
+        mutate(Model = y)
+    }) %>%
+    bind_rows() %>%
+    ggplot(aes(x = 1 - specificity, y = sensitivity, color = Model)) +
+    geom_path() +
+    geom_abline(lty = 3) +
+    theme_bw() +
+    theme(
+      legend.position = c(0.7, 0.3),
+      legend.title = element_blank(),
+      legend.direction = "vertical",
+      axis.text.x = element_text(colour = "black"),
+      axis.text.y = element_text(colour = "black")
+    ) +
+    xlab("False Positive Rate") +
+    ylab("True Positive Rate") +
+    scale_color_manual(values = c(
+      wesanderson::wes_palette("FantasticFox1")[1],
+      wesanderson::wes_palette("FantasticFox1")[2],
+      wesanderson::wes_palette("FantasticFox1")[3],
+      wesanderson::wes_palette("FantasticFox1")[5]
+    ))
+}
+
+get_auc <- function(df) {
+  df %>%
+    map2(., specifications_list, function(x, y) {
+      collect_metrics(x) %>%
+        select(mean) %>%
+        mutate(Model = y)
+    }) %>%
+    bind_rows()
+}
+
+specifications_list <- c("AF", "AF + CF", "AF + CF + XYZ", "AF + CF + MF")
+roc_results <- map(df_list, evaluate_models_glm_auc)
+roc_results %>% map(., get_auc)
+roc_results %>% map(., plot_roc)
+```
