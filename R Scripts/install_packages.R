@@ -16,7 +16,12 @@ dep_packages <- c(
   "tune",
   "workflows",
   "yardstick",
-  "dials"
+  "dials",
+  "GPfit",
+  "lhs",
+  "DiceDesign",
+  "foreach",
+  "iterators"
 )
 
 cat("Installing tidymodels dependencies first...\n")
