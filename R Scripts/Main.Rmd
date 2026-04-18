@@ -36,10 +36,17 @@ source("utils.R")
 ```
 
 ```{r paths}
-inputPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/"
-splitPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/split_output/"
-graphPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/Graphs/"
-rdataPath  <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/R Data/"
+# Set this to wherever you cloned/downloaded the repository
+# Example: "C:/Users/yourname/Downloads/DS340/"
+# Example: "/Users/yourname/Documents/DS340/"
+# Do NOT include a trailing slash
+PROJECT_ROOT <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W"
+
+# All other paths are derived automatically - do not change these
+inputPath  <- paste0(PROJECT_ROOT, "/Data/")
+splitPath  <- paste0(PROJECT_ROOT, "/Data/split_output/")
+graphPath  <- paste0(PROJECT_ROOT, "/Data/Graphs/")
+rdataPath  <- paste0(PROJECT_ROOT, "/R Data/")
 ```
 
 ```{r load-data}

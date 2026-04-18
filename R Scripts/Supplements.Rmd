@@ -32,11 +32,21 @@ options(xtable.comment = FALSE, width = 80, scipen = 999)
 plan(multisession, workers = parallel::detectCores() / 2)
 source("utils.R")
 ```
+
 ```{r paths}
-inputPath <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/"
-splitPath <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/split_output/"
-graphPath <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W/Data/Graphs/"
+# Set this to wherever you cloned/downloaded the repository
+# Example: "C:/Users/yourname/Downloads/DS340/"
+# Example: "/Users/yourname/Documents/DS340/"
+# Do NOT include a trailing slash
+PROJECT_ROOT <- "C:/Users/Josh/OneDrive - The Pennsylvania State University/DS 340W"
+
+# All other paths are derived automatically - do not change these
+inputPath  <- paste0(PROJECT_ROOT, "/Data/")
+splitPath  <- paste0(PROJECT_ROOT, "/Data/split_output/")
+graphPath  <- paste0(PROJECT_ROOT, "/Data/Graphs/")
+rdataPath  <- paste0(PROJECT_ROOT, "/R Data/")
 ```
+
 ```{r load-data}
 load_dataset <- function(path, label) {
   read_csv(path, show_col_types = FALSE) %>%
@@ -64,6 +74,7 @@ walk2(df_train, names(df_train), ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
 cat("Test set sizes:\n")
 walk2(df_test,  names(df_test),  ~ cat(" ", .y, ":", nrow(.x), "rows\n"))
 ```
+
 ```{r helper-functions}
 # Standard GLMM formula used across all robustness checks
 glmm_formula <- cbind(HReplies, Replies - HReplies) ~
@@ -203,6 +214,7 @@ evaluate_oos_r2 <- function(data, dataset_name, n_folds = 10, seed = 123) {
   r2_df
 }
 ```
+
 ```{r oos-r2-run}
 oos_r2_results <- list(
   Politicians = evaluate_oos_r2(df_train$Politicians, "Politicians"),
@@ -269,6 +281,7 @@ run_xyz_implausible_test <- function(data, dataset_name) {
        xyz_coef   = fixef(xyz_model)["XYZCount"])
 }
 ```
+
 ```{r xyz-run}
 xyz_results <- list(
   Politicians = run_xyz_implausible_test(df_train$Politicians, "Politicians"),
@@ -315,6 +328,7 @@ run_source_hate_check <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r source-hate-run}
 source_hate_results <- list(
   Politicians = run_source_hate_check(df_train$Politicians, "Politicians"),
@@ -364,6 +378,7 @@ run_retweet_check <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r retweet-run}
 retweet_results <- list(
   Politicians = run_retweet_check(df_train$Politicians, "Politicians"),
@@ -413,6 +428,7 @@ run_likes_check <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r likes-run}
 likes_results <- list(
   Politicians = run_likes_check(df_train$Politicians, "Politicians"),
@@ -522,6 +538,7 @@ run_proportions_check <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r proportions-run}
 proportions_results <- list(
   Politicians = run_proportions_check(df_train$Politicians, "Politicians"),
@@ -569,6 +586,7 @@ run_binary_check <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r binary-run}
 binary_results <- list(
   Politicians = run_binary_check(df_train$Politicians, "Politicians"),
@@ -614,6 +632,7 @@ run_distinct_emotions <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r distinct-emotions-run}
 distinct_emotions_results <- list(
   Politicians = run_distinct_emotions(df_train$Politicians, "Politicians"),
@@ -661,6 +680,7 @@ run_interactions_check <- function(data, dataset_name) {
   m
 }
 ```
+
 ```{r interactions-run}
 interaction_results <- list(
   Politicians = run_interactions_check(df_train$Politicians, "Politicians"),
