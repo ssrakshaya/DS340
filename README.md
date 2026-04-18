@@ -88,9 +88,46 @@ Run all chunks in `Main.Rmd` in order from top to bottom. The chunks are:
 13. `gmerf-cv-run` — runs GMERF cross-validation (~1 minute on 500 rows)
 14. `model-comparison` — displays comparison table
 15. `test-set` — runs test set evaluation
-16. Visualization chunks — generates all figures
+16. `overfitting-check` — compares test RMSE to CV RMSE across all models
+17. `bb-99ci` — computes 99% confidence intervals for BB coefficients
+18. `gamm-parametric` — extracts GAMM parametric coefficient table
+19. Visualization chunks — generates all figures and saves to Graphs folder
 
 > **Note:** Running on 500 rows verifies the code runs without errors but will not reproduce the reported results. Sample results will look different from the paper — this is expected.
+
+---
+
+After completing `Main.Rmd`, open `Supplements.Rmd` and update `PROJECT_ROOT` in the `paths` chunk to match your machine (same path as `Main.Rmd`). Then run all chunks in order from top to bottom. The chunks are:
+
+1. `setup` — loads all libraries
+2. `paths` — sets file paths using your PROJECT_ROOT
+3. `load-data` — loads all three datasets
+4. `helper-functions` — defines shared formulas and helper functions used across all robustness checks
+5. `oos-r2-function` — defines out-of-sample R² evaluation function
+6. `oos-r2-run` — runs OOS R² comparison across four model specifications (~2 minutes on 500 rows)
+7. `xyz-function` — defines XYZ implausible model test function
+8. `xyz-run` — fits main model and implausible XYZ model, compares AIC (~1 minute on 500 rows)
+9. `source-hate-function` — defines source hate control model function
+10. `source-hate-run` — fits model controlling for whether source tweet was hateful (~30 seconds on 500 rows)
+11. `retweet-function` — defines retweet count control function
+12. `retweet-run` — fits model controlling for retweet count (~30 seconds on 500 rows)
+13. `likes-function` — defines like count control function
+14. `likes-run` — fits model controlling for like count (~30 seconds on 500 rows)
+15. `directed-generalised-function` — defines directed vs generalised hate speech function
+16. `directed-generalised-run` — fits separate models for directed and generalised hate speech (~1 minute on 500 rows)
+17. `proportions-function` — defines word proportions specification function
+18. `proportions-run` — fits model using moral word proportions instead of counts (~30 seconds on 500 rows)
+19. `binary-function` — defines binary moral words indicator function
+20. `binary-run` — fits model using binary presence/absence indicators (~30 seconds on 500 rows)
+21. `distinct-emotions-function` — defines positive/negative emotional words function
+22. `distinct-emotions-run` — fits model separating emotional words by valence (~30 seconds on 500 rows)
+23. `interactions-function` — defines interaction effects function
+24. `interactions-run` — fits model with MoralWords × WordCount interaction terms (~30 seconds on 500 rows)
+25. `robustness-summary` — prints consolidated summary of all robustness check results
+26. `oos-r2-improvement-plot` — generates OOS R² improvement bar chart
+27. `robustness-stability-plot` — generates MoralWords coefficient stability plot across all nine specifications
+
+> **Note:** All robustness checks use `df_train_sample` so they will run quickly on 500 rows. Results will differ from the paper but the code will run without errors.
 
 ### Step 6 — Load saved results to verify reported findings
 
