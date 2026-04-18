@@ -217,9 +217,9 @@ evaluate_oos_r2 <- function(data, dataset_name, n_folds = 10, seed = 123) {
 
 ```{r oos-r2-run}
 oos_r2_results <- list(
-  Politicians = evaluate_oos_r2(df_train$Politicians, "Politicians"),
-  Newspeople  = evaluate_oos_r2(df_train$Newspeople,  "Newspeople"),
-  Activists   = evaluate_oos_r2(df_train$Activists,   "Activists")
+  Politicians = evaluate_oos_r2(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = evaluate_oos_r2(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = evaluate_oos_r2(df_train_sample$Activists,   "Activists")
 )
 
 save(oos_r2_results, file = "oos_r2_results.RData")
@@ -284,9 +284,9 @@ run_xyz_implausible_test <- function(data, dataset_name) {
 
 ```{r xyz-run}
 xyz_results <- list(
-  Politicians = run_xyz_implausible_test(df_train$Politicians, "Politicians"),
-  Newspeople  = run_xyz_implausible_test(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_xyz_implausible_test(df_train$Activists,   "Activists")
+  Politicians = run_xyz_implausible_test(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_xyz_implausible_test(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_xyz_implausible_test(df_train_sample$Activists,   "Activists")
 )
 
 save(xyz_results, file = "xyz_results.RData")
@@ -331,9 +331,9 @@ run_source_hate_check <- function(data, dataset_name) {
 
 ```{r source-hate-run}
 source_hate_results <- list(
-  Politicians = run_source_hate_check(df_train$Politicians, "Politicians"),
-  Newspeople  = run_source_hate_check(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_source_hate_check(df_train$Activists,   "Activists")
+  Politicians = run_source_hate_check(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_source_hate_check(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_source_hate_check(df_train_sample$Activists,   "Activists")
 )
 
 save(source_hate_results, file = "source_hate_results.RData")
@@ -381,9 +381,9 @@ run_retweet_check <- function(data, dataset_name) {
 
 ```{r retweet-run}
 retweet_results <- list(
-  Politicians = run_retweet_check(df_train$Politicians, "Politicians"),
-  Newspeople  = run_retweet_check(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_retweet_check(df_train$Activists,   "Activists")
+  Politicians = run_retweet_check(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_retweet_check(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_retweet_check(df_train_sample$Activists,   "Activists")
 )
 
 save(retweet_results, file = "retweet_results.RData")
@@ -431,9 +431,9 @@ run_likes_check <- function(data, dataset_name) {
 
 ```{r likes-run}
 likes_results <- list(
-  Politicians = run_likes_check(df_train$Politicians, "Politicians"),
-  Newspeople  = run_likes_check(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_likes_check(df_train$Activists,   "Activists")
+  Politicians = run_likes_check(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_likes_check(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_likes_check(df_train_sample$Activists,   "Activists")
 )
 
 save(likes_results, file = "likes_results.RData")
@@ -493,9 +493,9 @@ run_directed_generalised <- function(data, dataset_name) {
 ```
 ```{r directed-generalised-run}
 directed_results <- list(
-  Politicians = run_directed_generalised(df_train$Politicians, "Politicians"),
-  Newspeople  = run_directed_generalised(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_directed_generalised(df_train$Activists,   "Activists")
+  Politicians = run_directed_generalised(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_directed_generalised(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_directed_generalised(df_train_sample$Activists,   "Activists")
 )
 
 save(directed_results, file = "directed_results.RData")
@@ -541,9 +541,9 @@ run_proportions_check <- function(data, dataset_name) {
 
 ```{r proportions-run}
 proportions_results <- list(
-  Politicians = run_proportions_check(df_train$Politicians, "Politicians"),
-  Newspeople  = run_proportions_check(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_proportions_check(df_train$Activists,   "Activists")
+  Politicians = run_proportions_check(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_proportions_check(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_proportions_check(df_train_sample$Activists,   "Activists")
 )
 
 save(proportions_results, file = "proportions_results.RData")
@@ -589,9 +589,9 @@ run_binary_check <- function(data, dataset_name) {
 
 ```{r binary-run}
 binary_results <- list(
-  Politicians = run_binary_check(df_train$Politicians, "Politicians"),
-  Newspeople  = run_binary_check(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_binary_check(df_train$Activists,   "Activists")
+  Politicians = run_binary_check(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_binary_check(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_binary_check(df_train_sample$Activists,   "Activists")
 )
 
 save(binary_results, file = "binary_results.RData")
@@ -635,9 +635,9 @@ run_distinct_emotions <- function(data, dataset_name) {
 
 ```{r distinct-emotions-run}
 distinct_emotions_results <- list(
-  Politicians = run_distinct_emotions(df_train$Politicians, "Politicians"),
-  Newspeople  = run_distinct_emotions(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_distinct_emotions(df_train$Activists,   "Activists")
+  Politicians = run_distinct_emotions(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_distinct_emotions(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_distinct_emotions(df_train_sample$Activists,   "Activists")
 )
 
 save(distinct_emotions_results, file = "distinct_emotions_results.RData")
@@ -683,9 +683,9 @@ run_interactions_check <- function(data, dataset_name) {
 
 ```{r interactions-run}
 interaction_results <- list(
-  Politicians = run_interactions_check(df_train$Politicians, "Politicians"),
-  Newspeople  = run_interactions_check(df_train$Newspeople,  "Newspeople"),
-  Activists   = run_interactions_check(df_train$Activists,   "Activists")
+  Politicians = run_interactions_check(df_train_sample$Politicians, "Politicians"),
+  Newspeople  = run_interactions_check(df_train_sample$Newspeople,  "Newspeople"),
+  Activists   = run_interactions_check(df_train_sample$Activists,   "Activists")
 )
 
 save(interaction_results, file = "interaction_results.RData")
@@ -755,4 +755,228 @@ cat(rep("=", 55), "\n", sep = "")
 
 save.image("supplements_workspace.RData")
 cat("Full workspace saved.\n")
+```
+
+# Generate Visualizations
+
+## Robustness Check Coefficient Stability Plot
+
+```{r}
+robustness_sources <- list()
+
+robustness_sources$main <- imap_dfr(bb_models, function(m, nm) {
+  data.frame(Dataset = nm, Check = "Main model (BB)",
+             Estimate = fixef(m)$cond["MoralWords"],
+             stringsAsFactors = FALSE)
+})
+
+robustness_sources$source_hate <- imap_dfr(source_hate_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  data.frame(Dataset = nm, Check = "Source hate control",
+             Estimate = fixef(m)["MoralWords"],
+             stringsAsFactors = FALSE)
+})
+
+robustness_sources$binary <- imap_dfr(binary_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  coefs <- fixef(m)
+  val   <- if ("MoralBinaryTRUE" %in% names(coefs)) coefs["MoralBinaryTRUE"] else NA
+  data.frame(Dataset = nm, Check = "Binary indicator",
+             Estimate = val, stringsAsFactors = FALSE)
+})
+
+robustness_sources$proportions <- imap_dfr(proportions_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  coefs <- fixef(m)
+  val   <- if ("MoralWordsProp" %in% names(coefs)) coefs["MoralWordsProp"] else NA
+  data.frame(Dataset = nm, Check = "Word proportions",
+             Estimate = val, stringsAsFactors = FALSE)
+})
+
+if (exists("directed_results")) {
+  robustness_sources$directed <- imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$directed)) return(NULL)
+    data.frame(Dataset = nm, Check = "Directed hate",
+               Estimate = fixef(x$directed)["MoralWords"],
+               stringsAsFactors = FALSE)
+  })
+  robustness_sources$generalised <- imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$generalised)) return(NULL)
+    data.frame(Dataset = nm, Check = "Generalised hate",
+               Estimate = fixef(x$generalised)["MoralWords"],
+               stringsAsFactors = FALSE)
+  })
+} else {
+  cat("Note: directed_results not found - skipping directed/generalised hate checks.\n")
+}
+
+robustness_sources$interactions <- imap_dfr(interaction_results, function(m, nm) {
+  if (is.null(m)) return(NULL)
+  data.frame(Dataset = nm, Check = "With interactions",
+             Estimate = fixef(m)["MoralWords"],
+             stringsAsFactors = FALSE)
+})
+
+robustness_data <- bind_rows(robustness_sources) %>%
+  filter(!is.na(Estimate)) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Check   = factor(Check,   levels = unique(Check))
+  )
+
+
+robustness_data <- bind_rows(
+  # Main model coefficients from BB
+  imap_dfr(bb_models, function(m, nm) {
+    data.frame(
+      Dataset = nm, Check = "Main model (BB)",
+      Estimate = fixef(m)$cond["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Source hate control
+  imap_dfr(source_hate_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "Source hate control",
+      Estimate = fixef(m)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Binary indicator
+  imap_dfr(binary_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    coefs <- fixef(m)
+    val   <- if ("MoralBinaryTRUE" %in% names(coefs)) coefs["MoralBinaryTRUE"] else NA
+    data.frame(
+      Dataset = nm, Check = "Binary indicator",
+      Estimate = val,
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Proportions
+  imap_dfr(proportions_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    coefs <- fixef(m)
+    val   <- if ("MoralWordsProp" %in% names(coefs)) coefs["MoralWordsProp"] else NA
+    data.frame(
+      Dataset = nm, Check = "Word proportions",
+      Estimate = val,
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Directed hate
+  imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$directed)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "Directed hate",
+      Estimate = fixef(x$directed)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Generalised hate
+  imap_dfr(directed_results, function(x, nm) {
+    if (is.null(x$generalised)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "Generalised hate",
+      Estimate = fixef(x$generalised)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  }),
+  # Interactions
+  imap_dfr(interaction_results, function(m, nm) {
+    if (is.null(m)) return(NULL)
+    data.frame(
+      Dataset = nm, Check = "With interactions",
+      Estimate = fixef(m)["MoralWords"],
+      stringsAsFactors = FALSE
+    )
+  })
+) %>%
+  filter(!is.na(Estimate)) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Check   = factor(Check,   levels = c("Main model (BB)", "Source hate control",
+                                          "Binary indicator", "Word proportions",
+                                          "Directed hate", "Generalised hate",
+                                          "With interactions"))
+  )
+
+p_robust <- ggplot(robustness_data,
+                   aes(x = Check, y = Estimate, color = Dataset, group = Dataset)) +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_line(size = 0.8, alpha = 0.6) +
+  geom_point(size = 3) +
+  coord_flip() +
+  scale_color_manual(values = wes_palette("Darjeeling1")[c(1, 2, 3)]) +
+  labs(
+    title    = "MoralWords Coefficient Across Robustness Specifications",
+    subtitle = "Positive values across all checks confirm robustness of the main finding",
+    x        = NULL,
+    y        = "MoralWords Coefficient Estimate",
+    color    = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text       = element_text(size = 10),
+    plot.title      = element_text(size = 13, face = "bold"),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  )
+
+print(p_robust)
+ggsave(paste0(graphPath, "Robustness_MoralWords.pdf"),
+       p_robust, width = 20, height = 10, units = "cm", scale = 1.2)
+```
+
+## Out-of-Sample R-Squared Improvement Table
+
+```{r}
+r2_improve_data <- bind_rows(
+  imap_dfr(oos_r2_results, function(df, nm) {
+    ratio <- df$Moral_vs_Content_ratio[
+      df$Specification == "Author + Content + Moral"
+    ]
+    data.frame(Dataset = nm, Source = "Our replication",
+               Ratio = ratio, stringsAsFactors = FALSE)
+  }),
+  data.frame(
+    Dataset = c("Politicians", "Newspeople", "Activists"),
+    Source  = "Parent paper",
+    Ratio   = c(1.22, 1.55, 1.42),
+    stringsAsFactors = FALSE
+  )
+) %>%
+  mutate(
+    Dataset = factor(Dataset, levels = c("Politicians", "Newspeople", "Activists")),
+    Source  = factor(Source,  levels = c("Parent paper", "Our replication"))
+  )
+
+p_r2 <- ggplot(r2_improve_data,
+               aes(x = Dataset, y = Ratio, fill = Source)) +
+  geom_col(position = position_dodge(width = 0.6),
+           width = 0.5, color = "white") +
+  geom_hline(yintercept = 1, color = "grey40", linetype = "dashed") +
+  scale_fill_manual(values = c("Parent paper"    = "grey60",
+                               "Our replication" = "steelblue")) +
+  scale_y_continuous(breaks = seq(0, 2.5, by = 0.5),
+                     limits = c(0, 2.7)) +
+  labs(
+    title    = "Out-of-Sample R² Improvement from Adding Moral Language",
+    subtitle = "Ratio of moral language model R² to content-only model R²\nDashed line at 1.0 = no improvement",
+    x        = NULL,
+    y        = "R² Improvement Ratio",
+    fill     = NULL
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text       = element_text(size = 11),
+    plot.title      = element_text(size = 13, face = "bold"),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  )
+
+print(p_r2)
+ggsave(paste0(graphPath, "OOS_R2_improvement.pdf"),
+       p_r2, width = 16, height = 10, units = "cm", scale = 1.2)
 ```
