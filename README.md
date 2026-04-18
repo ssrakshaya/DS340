@@ -22,16 +22,6 @@ Replication and extension of [Solovev & Pröllochs (2022)](https://doi.org/10.10
 
 ---
 
-## Data
-
-Data is from [Solovev & Pröllochs (2022)](https://osf.io/k4baq/) via the Open Science Framework and covers tweets authored by US politicians, news media personalities, and activists during 2021, with corresponding replies labeled for hate speech.
-
-The pre-split CSV files in `Data/split_output/` are provided directly so models can be reproduced without rerunning the splitting scripts. Splits were originally generated using `split_data.py` (Python, numpy seed 42) at the user level — all tweets from a given author are assigned to the same split, preventing data leakage through random effects.
-
-> **Note:** `split_data.R` is provided as an R-only alternative but will produce slightly different user assignments due to differences between Python and R random number generators. To exactly reproduce reported results, use the pre-split CSV files.
-
----
-
 ## Models
 
 Three models extend the parent paper's binomial GLMM:
@@ -42,62 +32,95 @@ Three models extend the parent paper's binomial GLMM:
 | **GAMM** | Generalized additive mixed model | Relaxes linearity assumption; models non-linear predictor effects |
 | **GMERF** | Generalized mixed effects random forest | Relaxes both linearity and parametric assumptions; iterative EM algorithm |
 
-All three models use the same predictors and user-level random effects as the original paper.
-
 ---
 
-## Reproducing the Analysis
+## Running the Code on a New Machine
 
-### Requirements
+### Step 1 — Install R and RStudio
+- Download R from https://cran.r-project.org/ (minimum version 4.1.0)
+- Download RStudio from https://posit.co/download/rstudio-desktop/
 
+### Step 2 — Download the repository
+- Go to https://github.com/ssrakshaya/DS340
+- Click the green **Code** button and select **Download ZIP**
+- Extract the ZIP to a folder of your choice
+- Note the full path to that folder
+
+### Step 3 — Install required packages
+- Open RStudio
+- Open `R Scripts/install_packages.R`
+- Run the entire script and wait for all packages to install
+- All packages should show a checkmark when complete
+
+### Step 4 — Set your project path
+- Open `R Scripts/Main.Rmd` in RStudio
+- Find the `paths` chunk near the top of the file
+- Change `PROJECT_ROOT` to match where you extracted the repository:
+
+**Windows:**
 ```r
-install.packages(c("tidyverse", "lme4", "glmmTMB", "mgcv", "ranger",
-                   "tidymodels", "broom", "broom.mixed", "wesanderson",
-                   "car", "furrr", "lubridate", "texreg", "xtable"))
+PROJECT_ROOT <- "C:/Users/yourname/Downloads/DS340"
 ```
 
-### Running order
-
-1. Open `Main.Rmd` and update the three path variables at the top of the `paths` chunk to match your machine:
-
+**Mac:**
 ```r
-inputPath <- "path/to/Data/"
-splitPath <- "path/to/Data/split_output/"
-graphPath <- "path/to/Data/Graphs/"
-rdataPath <- "path/to/R Data/"
+PROJECT_ROOT <- "/Users/yourname/Downloads/DS340"
 ```
 
-2. Run the `setup`, `paths`, `load-data`, and `functions` chunks to initialize the environment.
+This is the only line you need to change. All other paths are set automatically.
 
-3. To run on a sample rather than the full dataset (recommended for testing), set `DEV_SAMPLE` in the `sample-for-dev` chunk:
+### Step 5 — Run the code
+
+Run all chunks in `Main.Rmd` in order from top to bottom. The chunks are:
+
+1. `setup` — loads all libraries
+2. `paths` — sets file paths using your PROJECT_ROOT
+3. `load-data` — loads all three datasets
+4. `functions` — defines helper functions
+5. `sample-for-dev` — **DEV_SAMPLE is set to 500 by default for quick verification**
+6. `bb-fit` — fits Beta-Binomial model (~30 seconds on 500 rows)
+7. `bb-cv` — runs BB cross-validation (~1 minute on 500 rows)
+8. `gamm-fit` — fits GAMM (~60 seconds on 500 rows)
+9. `gamm-cv` — runs GAMM cross-validation (~2 minutes on 500 rows)
+10. `gmerf-function` — defines GMERF function
+11. `gmerf-fit` — fits GMERF (~30 seconds on 500 rows)
+12. `gmerf-cv-function` — defines GMERF CV function
+13. `gmerf-cv-run` — runs GMERF cross-validation (~1 minute on 500 rows)
+14. `model-comparison` — displays comparison table
+15. `test-set` — runs test set evaluation
+16. Visualization chunks — generates all figures
+
+> **Note:** Running on 500 rows verifies the code runs without errors but will not reproduce the reported results. Sample results will look different from the paper — this is expected.
+
+### Step 6 — Load saved results to verify reported findings
+
+After running all chunks, paste the following into the R console to load the full pre-saved results and verify the numbers reported in the paper:
 
 ```r
-DEV_SAMPLE <- 2000   # quick test run (~10 minutes)
-DEV_SAMPLE <- NULL   # full training data (~15 hours)
-```
-
-4. Run model chunks in order: BB → GAMM → GMERF → CV chunks → Model Comparison → Test Set Evaluation → Visualizations.
-
-5. For robustness checks, run `Supplements.Rmd` following the same path setup.
-
-### Loading saved results without refitting
-
-If saved `.RData` files are available, paste the following into the R console to restore all results without refitting:
-
-```r
-rdataPath <- "path/to/R Data/"
+rdataPath <- paste0(PROJECT_ROOT, "/R Data/")
 load(paste0(rdataPath, "bb_models.RData"))
-load(paste0(rdataPath, "gamm_models.RData"))
-load(paste0(rdataPath, "gmerf_models.RData"))
 load(paste0(rdataPath, "bb_cv_results.RData"))
 load(paste0(rdataPath, "gamm_cv_results.RData"))
 load(paste0(rdataPath, "gmerf_cv_results.RData"))
 gmerf_cv_results <- cv_results
 load(paste0(rdataPath, "test_results.RData"))
 load(paste0(rdataPath, "oos_r2_results.RData"))
+load(paste0(rdataPath, "bb_99ci.RData"))
+load(paste0(rdataPath, "gamm_parametric.RData"))
+load(paste0(rdataPath, "source_hate_results.RData"))
+load(paste0(rdataPath, "binary_results.RData"))
+load(paste0(rdataPath, "proportions_results.RData"))
+load(paste0(rdataPath, "distinct_emotions_results.RData"))
+load(paste0(rdataPath, "interaction_results.RData"))
+cat("All results loaded successfully.\n")
 ```
 
-> **Note:** Large model objects (`bb_models`, `gamm_models`, `gmerf_models`) are not included in this repository due to file size. They can be regenerated by running the model fitting chunks in `Main.Rmd`.
+Then rerun the model comparison, test set, and visualization chunks to display the full reported results.
+
+> **Note:** Large model objects (gamm_models, gmerf_models) are not included in this repository due to file size constraints. The pre-saved results files above contain all numerical outputs reported in the paper.
+
+### Step 7 — Full reproduction (optional, ~15 hours)
+To reproduce results from scratch on the full dataset, set `DEV_SAMPLE <- NULL` in the `sample-for-dev` chunk and rerun all model fitting and CV chunks. This will exactly reproduce all reported results.
 
 ---
 
@@ -115,6 +138,12 @@ Cross-validation RMSE is essentially identical across all three model specificat
 
 ---
 
+## Data
+
+Data is from [Solovev & Pröllochs (2022)](https://osf.io/k4baq/) via the Open Science Framework. Pre-split CSV files are provided in `Data/split_output/` so data splitting does not need to be rerun. Splits were generated at the user level — all tweets from a given author are assigned to the same split — preventing data leakage through random effects.
+
+---
+
 ## Citation
 
 Solovev, K., & Pröllochs, N. (2022). Moralized language predicts hate speech on social media. *PNAS Nexus*, 2(1). https://doi.org/10.1093/pnasnexus/pgac281
@@ -124,5 +153,4 @@ Solovev, K., & Pröllochs, N. (2022). Moralized language predicts hate speech on
 ## Authors
 
 KS — Penn State University, DS 340W
-
 
